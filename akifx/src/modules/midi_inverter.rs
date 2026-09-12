@@ -24,16 +24,17 @@
 //!
 //! # MIDI Output Routing
 //!
-//! Transformed events are queued internally and must be consumed by the
-//! plugin-level MIDI output routing in a future integration wave. Call
-//! [`MidiInverterModule::take_transformed_events`] after each process block
-//! to drain the queue.
+//! Transformed events are queued internally and drained by the plugin-level
+//! MIDI output routing after every process block (see
+//! `AkiFx::process`/[`MidiInverterModule::take_output_midi`]).
 //!
 //! # Parameter
 //!
 //! - **Enable** (`#[id = "midi_inv_enable"]`): Bypass toggle (BoolParam).
-//!   When disabled the module produces bit-identical audio and passes all
-//!   MIDI events through unmodified.
+//!   When disabled the module produces bit-identical audio and emits no MIDI
+//!   events of its own (the original events are untouched — echoing them to
+//!   the output queue would duplicate what the host's MIDI thru already
+//!   delivers).
 
 use crate::modules::AkiFxModule;
 use nih_plug::prelude::*;
@@ -319,13 +320,16 @@ impl AkiFxModule for MidiInverterModule {
         right: &mut [f32],
         note_events: &[NoteEvent<()>],
     ) {
-        // When disabled, pass everything through unchanged.
+        // When disabled, emit nothing: the chain broadcasts the original
+        // events to the other modules and the host's own MIDI thru already
+        // delivers them downstream, so echoing them to the output queue
+        // would duplicate every event. Audio always passes through
+        // unchanged.
         if self.params.enable.value() {
             for ev in note_events {
                 self.transformed_queue.extend(invert_event(*ev));
             }
         }
-        // Audio always passes through unchanged.
         let _ = left;
         let _ = right;
     }

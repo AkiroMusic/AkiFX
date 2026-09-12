@@ -157,15 +157,21 @@ impl SineWavetable {
 
     /// Get interpolated value at a fractional index (wraps).
     fn get_value(&self, index: f32) -> f32 {
-        let index = ((index as i32) % (self.table.len() as i32)) as usize;
-        let val_a = self.table[index];
-        let next_index = if index + 1 >= self.table.len() {
+        // Wrap into [0, table_len) while KEEPING the fractional part — the
+        // previous version truncated to usize before computing `frac`, which
+        // made it always 0 and turned the interpolation into a zero-order
+        // hold.
+        let len = self.table.len() as f32;
+        let wrapped = index.rem_euclid(len);
+        let idx = wrapped as usize;
+        let frac = wrapped - idx as f32;
+        let next_index = if idx + 1 >= self.table.len() {
             0
         } else {
-            index + 1
+            idx + 1
         };
+        let val_a = self.table[idx];
         let val_b = self.table[next_index];
-        let frac = index as f32 - (index as f32).floor();
         val_a + (val_b - val_a) * frac
     }
 }
@@ -301,17 +307,11 @@ impl AkiFxModule for SinusoidalShapedFilterModule {
             self.rebuild();
         }
 
-        // When PVOC disabled: passthrough
+        // When PVOC disabled the spectral processing is skipped, so the
+        // "wet" signal equals the dry one and any mix value blends dry with
+        // dry. True passthrough — the old code scaled the signal by
+        // (1 - mix), attenuating the output at lower mix settings.
         if !self.params.use_pvoc.value() {
-            if mix < 1.0 {
-                let dry_gain = 1.0 - mix;
-                for s in left.iter_mut() {
-                    *s *= dry_gain;
-                }
-                for s in right.iter_mut() {
-                    *s *= dry_gain;
-                }
-            }
             return;
         }
 

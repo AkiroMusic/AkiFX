@@ -136,12 +136,16 @@ pub struct CompressorParams {
 // ── ThresholdParams impl ───────────────────────────────────────────────────
 
 impl ThresholdParams {
-    /// Create threshold params linked to the compressor bank.
-    pub fn new(compressor_bank: &CompressorBank) -> Self {
-        let dw_thresh = compressor_bank.should_update_downwards_thresholds.clone();
-        let up_thresh = compressor_bank.should_update_upwards_thresholds.clone();
-        let dw_knee = compressor_bank.should_update_downwards_knee_parabolas.clone();
-        let up_knee = compressor_bank.should_update_upwards_knee_parabolas.clone();
+    /// Create threshold params. The parameter callbacks flip private
+    /// update-flag atomics that nobody consumes: the module detects curve
+    /// parameter changes by value comparison instead (see
+    /// `SpectralCompressorModule::flag_curve_param_changes`), because the
+    /// params object cannot reach the bank instance the DSP actually uses.
+    pub fn new() -> Self {
+        let dw_thresh = Arc::new(AtomicBool::new(false));
+        let up_thresh = Arc::new(AtomicBool::new(false));
+        let dw_knee = Arc::new(AtomicBool::new(false));
+        let up_knee = Arc::new(AtomicBool::new(false));
 
         let set_update_both = Arc::new(move |_| {
             dw_thresh.store(true, Ordering::SeqCst);
@@ -290,21 +294,13 @@ impl ThresholdParams {
 // ── CompressorBankParams impl ──────────────────────────────────────────────
 
 impl CompressorBankParams {
-    /// Create params for both compressor banks.
-    pub fn new(compressor: &CompressorBank) -> Self {
+    /// Create params for both compressor banks. The parameter callbacks flip
+    /// private update-flag atomics that nobody consumes; see
+    /// [`ThresholdParams::new`] for why.
+    pub fn new() -> Self {
         CompressorBankParams {
-            downwards: Arc::new(CompressorParams::new(
-                DOWNWARDS_NAME_PREFIX,
-                compressor.should_update_downwards_thresholds.clone(),
-                compressor.should_update_downwards_ratios.clone(),
-                compressor.should_update_downwards_knee_parabolas.clone(),
-            )),
-            upwards: Arc::new(CompressorParams::new(
-                UPWARDS_NAME_PREFIX,
-                compressor.should_update_upwards_thresholds.clone(),
-                compressor.should_update_upwards_ratios.clone(),
-                compressor.should_update_upwards_knee_parabolas.clone(),
-            )),
+            downwards: Arc::new(CompressorParams::new(DOWNWARDS_NAME_PREFIX)),
+            upwards: Arc::new(CompressorParams::new(UPWARDS_NAME_PREFIX)),
         }
     }
 
@@ -341,12 +337,10 @@ impl CompressorBankParams {
 // ── CompressorParams impl ──────────────────────────────────────────────────
 
 impl CompressorParams {
-    fn new(
-        name_prefix: &str,
-        should_update_thresholds: Arc<AtomicBool>,
-        should_update_ratios: Arc<AtomicBool>,
-        should_update_knee_parabolas: Arc<AtomicBool>,
-    ) -> Self {
+    fn new(name_prefix: &str) -> Self {
+        let should_update_thresholds = Arc::new(AtomicBool::new(false));
+        let should_update_ratios = Arc::new(AtomicBool::new(false));
+        let should_update_knee_parabolas = Arc::new(AtomicBool::new(false));
         let set_update_thresholds = Arc::new({
             let knee = should_update_knee_parabolas.clone();
             move |_| {
@@ -600,6 +594,12 @@ impl CompressorBank {
     /// Clear envelope followers.
     pub fn reset(&mut self) {
         self.envelope_followers_timing_scale = 0.0;
+        for env in &mut self.envelopes {
+            env.fill(ENVELOPE_INIT_VALUE);
+        }
+        for mag in &mut self.sidechain_spectrum_magnitudes {
+            mag.fill(0.0);
+        }
     }
 
     /// Get a reference to the analyzer data.

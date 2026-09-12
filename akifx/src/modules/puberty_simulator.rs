@@ -154,8 +154,6 @@ struct ChannelState {
     write_pos: usize,
     /// Current read position in the output ring buffer (lags write_pos by `window_size`).
     read_pos: usize,
-    /// Samples accumulated since last FFT trigger.
-    pending: usize,
     /// Working frame buffer for FFT processing (size `fft_size`).
     frame: Vec<f32>,
     /// Complex FFT buffer (size `fft_size / 2 + 1`).
@@ -169,7 +167,6 @@ impl ChannelState {
             output_ring: Vec::new(),
             write_pos: 0,
             read_pos: 0,
-            pending: 0,
             frame: Vec::new(),
             complex_buf: Vec::new(),
         }
@@ -193,7 +190,6 @@ impl ChannelState {
         }
         self.write_pos = 0;
         self.read_pos = 0;
-        self.pending = 0;
     }
 }
 
@@ -284,6 +280,13 @@ impl PubertySimulatorModule {
     }
 
     /// Build Hann window for the given size if needed.
+    ///
+    /// Note: deliberately does NOT touch `cached_window_size` — that field
+    /// tracks which size the per-channel buffers were built for, and process()
+    /// compares against it to decide when to reallocate them. (It used to be
+    /// set here too, which made the comparison always false and skipped
+    /// channel-buffer resizes on runtime window-size changes — leading to
+    /// out-of-bounds indexing.)
     fn ensure_window(&mut self, window_size: usize) {
         if self.window.len() == window_size {
             return;
@@ -296,7 +299,6 @@ impl PubertySimulatorModule {
         for i in 0..window_size {
             self.window[i] = 0.5 * (1.0 - (2.0 * f32::consts::PI * i as f32 / n).cos());
         }
-        self.cached_window_size = window_size;
     }
 
     /// Ensure per-channel buffers match the current window size.
@@ -524,8 +526,6 @@ impl AkiFxModule for PubertySimulatorModule {
                     (self.channels[0].write_pos + 1) % window_size;
                 self.channels[1].write_pos =
                     (self.channels[1].write_pos + 1) % window_size;
-                self.channels[0].pending += 1;
-                self.channels[1].pending += 1;
             }
 
             written += samples_to_process;
@@ -542,8 +542,6 @@ impl AkiFxModule for PubertySimulatorModule {
                         gain_compensation,
                     );
                 }
-                self.channels[0].pending -= hop_size;
-                self.channels[1].pending -= hop_size;
             }
         }
     }

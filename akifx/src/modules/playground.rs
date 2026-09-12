@@ -218,17 +218,11 @@ impl AkiFxModule for PlaygroundModule {
             self.build_engine();
         }
 
-        // When PVOC disabled: passthrough (scaled by mix)
+        // When PVOC disabled the spectral processing is skipped, so the
+        // "wet" signal equals the dry one and any mix value blends dry with
+        // dry. True passthrough — the old code scaled the signal by
+        // (1 - mix), attenuating the output at lower mix settings.
         if !self.params.use_pvoc.value() {
-            if mix < 1.0 {
-                let dry_gain = 1.0 - mix;
-                for s in left.iter_mut() {
-                    *s *= dry_gain;
-                }
-                for s in right.iter_mut() {
-                    *s *= dry_gain;
-                }
-            }
             return;
         }
 

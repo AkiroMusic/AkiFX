@@ -493,7 +493,9 @@ impl CrispModule {
         match self.params.mode.value() {
             Mode::Soggy => sample * noise,
             Mode::Crispy => sample.max(0.0) * noise,
-            Mode::CrispyNegated => sample.max(0.0) * noise,
+            // Ring-modulate only the negative part of the signal (this used
+            // to be a copy of Crispy, making the mode a no-op duplicate).
+            Mode::CrispyNegated => sample.min(0.0) * noise,
         }
     }
 

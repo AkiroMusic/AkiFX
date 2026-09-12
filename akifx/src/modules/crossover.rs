@@ -504,6 +504,12 @@ pub struct CrossoverModule {
     bypass: Arc<AtomicBool>,
     iir_crossover: IirCrossover,
     sample_rate: f32,
+    /// Filter-band count and frequencies the coefficients were last built
+    /// with, so `process()` can rebuild them when automation changes the
+    /// crossover points (previously coefficients were only computed in
+    /// `initialize()`/`reset()`, making frequency automation a no-op).
+    cached_num_bands: usize,
+    cached_frequencies: [f32; MAX_BANDS - 1],
 }
 
 impl CrossoverModule {
@@ -514,6 +520,8 @@ impl CrossoverModule {
             bypass,
             iir_crossover: IirCrossover::default(),
             sample_rate: 44100.0,
+            cached_num_bands: 0,
+            cached_frequencies: [-1.0; MAX_BANDS - 1],
         }
     }
 
@@ -551,6 +559,18 @@ impl CrossoverModule {
         let frequencies = self.crossover_frequencies();
         self.iir_crossover
             .update(self.sample_rate, num_bands, &frequencies);
+        self.cached_num_bands = num_bands;
+        self.cached_frequencies = frequencies;
+    }
+
+    /// Rebuild the filter coefficients if the band count or crossover
+    /// frequencies changed since they were last computed.
+    fn update_filters_if_changed(&mut self) {
+        let num_bands = self.params.num_bands.value() as usize;
+        let frequencies = self.crossover_frequencies();
+        if num_bands != self.cached_num_bands || frequencies != self.cached_frequencies {
+            self.update_filters();
+        }
     }
 }
 
@@ -578,6 +598,9 @@ impl AkiFxModule for CrossoverModule {
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        // Rebuild coefficients when automation moved the crossover points.
+        self.update_filters_if_changed();
+
         let num_bands = self.params.num_bands.value() as usize;
         let gains = self.band_gains();
 

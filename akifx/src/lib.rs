@@ -137,14 +137,9 @@ pub struct AkiFxParams {
 
 impl Default for AkiFxParams {
     fn default() -> Self {
-        // SpectralCompressorParams needs a CompressorBank to wire its
-        // threshold-update callbacks. We create a throwaway bank here;
-        // the module will create its own during construction.
-        let compressor_bank = CompressorBank::new(2, 1 << 15);
-
         Self {
-            sine_gen: Arc::new(SineGenParams::new(0.0, 440.0)),
-            midi_inverter: Arc::new(MidiInverterParams::new(false)),
+            sine_gen: Arc::new(SineGenParams::new(-12.0, 440.0)),
+            midi_inverter: Arc::new(MidiInverterParams::new(true)),
             poly_mod_synth: Arc::new(PolyModSynthParams::new()),
             playground: Arc::new(PlaygroundParams::new()),
             soft_vacuum: Arc::new(SoftVacuumParams::default()),
@@ -160,7 +155,7 @@ impl Default for AkiFxParams {
             crossover: Arc::new(CrossoverParams::default()),
             diopser: Arc::new(DiopserParams::new()),
             loudness_war_winner: Arc::new(LoudnessWarWinnerParams::default()),
-            spectral_compressor: Arc::new(SpectralCompressorParams::new(&compressor_bank)),
+            spectral_compressor: Arc::new(SpectralCompressorParams::new()),
             buffr_glitch: Arc::new(BuffrGlitchParams::default()),
             gain: Arc::new(GainParams::new(0.0)),
             safety_limiter: Arc::new(SafetyLimiterParams::new()),

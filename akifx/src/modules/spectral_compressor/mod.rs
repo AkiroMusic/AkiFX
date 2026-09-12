@@ -31,12 +31,15 @@ pub mod curve;
 pub mod dry_wet_mixer;
 
 use crate::modules::AkiFxModule;
-use compressor_bank::{CompressorBank, CompressorBankParams, ThresholdParams};
+use compressor_bank::{
+    CompressorBank, CompressorBankParams, ThresholdMode, ThresholdParams,
+};
 use dry_wet_mixer::{DryWetMixer, MixingStyle};
 use nih_plug::prelude::*;
 use realfft::num_complex::Complex32;
 use realfft::{ComplexToReal, RealFftPlanner, RealToComplex};
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -183,12 +186,15 @@ impl Default for GlobalParams {
 }
 
 impl SpectralCompressorParams {
-    /// Create new parameters linked to the compressor bank.
-    pub fn new(compressor_bank: &CompressorBank) -> Self {
+    /// Create new parameters. The compressor-curve update flags these
+    /// callbacks used to wire into belong to a bank the DSP never sees, so
+    /// the module detects curve parameter changes by value comparison
+    /// instead (see `SpectralCompressorModule::flag_curve_param_changes`).
+    pub fn new() -> Self {
         SpectralCompressorParams {
             global: Arc::new(GlobalParams::default()),
-            threshold: Arc::new(ThresholdParams::new(compressor_bank)),
-            compressors: CompressorBankParams::new(compressor_bank),
+            threshold: Arc::new(ThresholdParams::new()),
+            compressors: CompressorBankParams::new(),
         }
     }
 
@@ -371,6 +377,51 @@ pub struct SpectralCompressorModule {
 
     /// Per-channel OLA state.
     channels: [ChannelState; 2],
+
+    /// Last-seen values of the curve-affecting parameters, for change
+    /// detection. `None` until the first block.
+    cached_curve_params: Option<CachedCurveParams>,
+}
+
+/// Snapshot of the parameters that shape the compressor curves. When any of
+/// these change, the corresponding bank curves must be recomputed.
+#[derive(Clone, Copy, PartialEq)]
+struct CachedCurveParams {
+    threshold_db: f32,
+    center_frequency: f32,
+    curve_slope: f32,
+    curve_curve: f32,
+    threshold_mode: ThresholdMode,
+    dw_threshold_offset: f32,
+    up_threshold_offset: f32,
+    dw_ratio: f32,
+    dw_hf_rolloff: f32,
+    up_ratio: f32,
+    up_hf_rolloff: f32,
+    dw_knee: f32,
+    up_knee: f32,
+}
+
+impl CachedCurveParams {
+    fn read(params: &SpectralCompressorParams) -> Self {
+        let threshold = &params.threshold;
+        let compressors = &params.compressors;
+        Self {
+            threshold_db: threshold.threshold_db.value(),
+            center_frequency: threshold.center_frequency.value(),
+            curve_slope: threshold.curve_slope.value(),
+            curve_curve: threshold.curve_curve.value(),
+            threshold_mode: threshold.mode.value(),
+            dw_threshold_offset: compressors.downwards.threshold_offset_db.value(),
+            up_threshold_offset: compressors.upwards.threshold_offset_db.value(),
+            dw_ratio: compressors.downwards.ratio.value(),
+            dw_hf_rolloff: compressors.downwards.high_freq_ratio_rolloff.value(),
+            up_ratio: compressors.upwards.ratio.value(),
+            up_hf_rolloff: compressors.upwards.high_freq_ratio_rolloff.value(),
+            dw_knee: compressors.downwards.knee_width_db.value(),
+            up_knee: compressors.upwards.knee_width_db.value(),
+        }
+    }
 }
 
 impl SpectralCompressorModule {
@@ -389,13 +440,14 @@ impl SpectralCompressorModule {
             dry_wet_mixer: DryWetMixer::new(2, 0, 0),
             compressor_bank,
             channels: [ChannelState::new(), ChannelState::new()],
+            cached_curve_params: None,
         }
     }
 
     /// Convenience constructor for testing.
     pub fn with_defaults() -> Self {
         let compressor_bank = CompressorBank::new(2, MAX_WINDOW_SIZE);
-        let params = Arc::new(SpectralCompressorParams::new(&compressor_bank));
+        let params = Arc::new(SpectralCompressorParams::new());
         let bypass = Arc::new(AtomicBool::new(false));
 
         Self {
@@ -409,6 +461,7 @@ impl SpectralCompressorModule {
             dry_wet_mixer: DryWetMixer::new(0, 0, 0),
             compressor_bank,
             channels: [ChannelState::new(), ChannelState::new()],
+            cached_curve_params: None,
         }
     }
 
@@ -418,6 +471,67 @@ impl SpectralCompressorModule {
 
     fn overlap_times(&self) -> usize {
         1 << self.params.global.overlap_times_order.value() as usize
+    }
+
+    /// Compare the curve-affecting parameters against the last seen values
+    /// and set the compressor bank's update flags for every curve group that
+    /// changed. The upstream plugin wires parameter callbacks directly to the
+    /// bank these flags live on; in this integration the params object is
+    /// constructed before the module and cannot reach the DSP's bank, so
+    /// value comparison restores the same "recompute on change" behavior.
+    fn flag_curve_param_changes(&mut self) {
+        let current = CachedCurveParams::read(&self.params);
+        let Some(previous) = self.cached_curve_params else {
+            // First block after construction/resize: update everything.
+            self.compressor_bank.should_update_downwards_thresholds.store(true, Ordering::SeqCst);
+            self.compressor_bank.should_update_upwards_thresholds.store(true, Ordering::SeqCst);
+            self.compressor_bank.should_update_downwards_ratios.store(true, Ordering::SeqCst);
+            self.compressor_bank.should_update_upwards_ratios.store(true, Ordering::SeqCst);
+            self.compressor_bank.should_update_downwards_knee_parabolas.store(true, Ordering::SeqCst);
+            self.compressor_bank.should_update_upwards_knee_parabolas.store(true, Ordering::SeqCst);
+            self.cached_curve_params = Some(current);
+            return;
+        };
+
+        let changed_thresholds = previous.threshold_db != current.threshold_db
+            || previous.center_frequency != current.center_frequency
+            || previous.curve_slope != current.curve_slope
+            || previous.curve_curve != current.curve_curve
+            || previous.threshold_mode != current.threshold_mode
+            || previous.dw_threshold_offset != current.dw_threshold_offset
+            || previous.up_threshold_offset != current.up_threshold_offset;
+        // Knee coefficients depend on thresholds and ratios too.
+        let changed_dw_knee = changed_thresholds
+            || previous.dw_ratio != current.dw_ratio
+            || previous.dw_hf_rolloff != current.dw_hf_rolloff
+            || previous.dw_knee != current.dw_knee;
+        let changed_up_knee = changed_thresholds
+            || previous.up_ratio != current.up_ratio
+            || previous.up_hf_rolloff != current.up_hf_rolloff
+            || previous.up_knee != current.up_knee;
+        let changed_dw_ratios = previous.dw_ratio != current.dw_ratio
+            || previous.dw_hf_rolloff != current.dw_hf_rolloff;
+        let changed_up_ratios = previous.up_ratio != current.up_ratio
+            || previous.up_hf_rolloff != current.up_hf_rolloff;
+
+        if changed_thresholds {
+            self.compressor_bank.should_update_downwards_thresholds.store(true, Ordering::SeqCst);
+            self.compressor_bank.should_update_upwards_thresholds.store(true, Ordering::SeqCst);
+        }
+        if changed_dw_ratios {
+            self.compressor_bank.should_update_downwards_ratios.store(true, Ordering::SeqCst);
+        }
+        if changed_up_ratios {
+            self.compressor_bank.should_update_upwards_ratios.store(true, Ordering::SeqCst);
+        }
+        if changed_dw_knee {
+            self.compressor_bank.should_update_downwards_knee_parabolas.store(true, Ordering::SeqCst);
+        }
+        if changed_up_knee {
+            self.compressor_bank.should_update_upwards_knee_parabolas.store(true, Ordering::SeqCst);
+        }
+
+        self.cached_curve_params = Some(current);
     }
 
     /// Plan all FFT sizes if not already done.
@@ -573,6 +687,9 @@ impl AkiFxModule for SpectralCompressorModule {
         let overlap_times = self.overlap_times();
         let hop_size = window_size / overlap_times;
 
+        // Recompute compressor curves if any curve parameter changed.
+        self.flag_curve_param_changes();
+
         // Handle runtime window size changes
         if self.cached_window_size != window_size {
             self.ensure_window(window_size);
@@ -698,6 +815,7 @@ mod tests {
             dry_wet_mixer: DryWetMixer::new(0, 0, 0),
             compressor_bank,
             channels: [ChannelState::new(), ChannelState::new()],
+            cached_curve_params: None,
         };
         m.initialize(SR, BLOCK);
         m
@@ -713,8 +831,8 @@ mod tests {
         ));
         let params = Arc::new(SpectralCompressorParams {
             global,
-            threshold: Arc::new(ThresholdParams::new(&cbank)),
-            compressors: CompressorBankParams::new(&cbank),
+            threshold: Arc::new(ThresholdParams::new()),
+            compressors: CompressorBankParams::new(),
         });
         let bypass = Arc::new(AtomicBool::new(false));
         let mut m = SpectralCompressorModule::new(params, bypass);
@@ -835,8 +953,8 @@ mod tests {
         ));
         let params = Arc::new(SpectralCompressorParams {
             global,
-            threshold: Arc::new(ThresholdParams::new(&compressor_bank)),
-            compressors: CompressorBankParams::new(&compressor_bank),
+            threshold: Arc::new(ThresholdParams::new()),
+            compressors: CompressorBankParams::new(),
         });
         let bypass = Arc::new(AtomicBool::new(false));
         let mut module = SpectralCompressorModule::new(params, bypass);

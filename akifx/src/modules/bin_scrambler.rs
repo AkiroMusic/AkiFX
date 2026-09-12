@@ -140,8 +140,10 @@ pub struct BinScramblerModule {
     cached_scatter: f32,
     /// Cached rate parameter for change detection.
     cached_rate: f32,
-    /// Cached overlap count for change detection.
-    cached_overlaps: i32,
+    /// Scratch for the per-frame interpolated source indices (num_bins).
+    blended_indices: Vec<usize>,
+    /// Scratch for the in-place bin permutation in the spectral callback.
+    scratch_polar: Vec<Polar>,
     /// Dry signal buffer for left channel.
     dry_buf_l: Vec<f32>,
     /// Dry signal buffer for right channel.
@@ -162,10 +164,11 @@ impl BinScramblerModule {
             current_ptr: 0,
             phasor: 0,
             phasor_max: 22050,
+            blended_indices: Vec::new(),
+            scratch_polar: Vec::new(),
             cached_scramble: 0.0,
             cached_scatter: 0.0,
             cached_rate: 0.0,
-            cached_overlaps: -1,
             dry_buf_l: Vec::new(),
             dry_buf_r: Vec::new(),
         }
@@ -186,7 +189,6 @@ impl BinScramblerModule {
             window: WindowType::Hann,
         };
         self.engine = Some(SpectralEngine::new(config, 2));
-        self.cached_overlaps = DEFAULT_OVERLAPS as i32;
     }
 
     /// Initialize both index buffers to identity (sequential indices).
@@ -195,6 +197,10 @@ impl BinScramblerModule {
         self.indices_a = (0..num_bins as i32).collect();
         self.indices_b = self.indices_a.clone();
         self.current_ptr = 0;
+        if self.blended_indices.len() != num_bins {
+            self.blended_indices = vec![0; num_bins];
+            self.scratch_polar = vec![Polar::default(); num_bins];
+        }
     }
 
     /// Recalculate internal parameters from current param values.
@@ -367,9 +373,12 @@ impl AkiFxModule for BinScramblerModule {
             self.phasor -= self.phasor_max;
         }
 
-        // Store phase for interpolation
+        // The phasor counts elapsed input samples, like the C++ original's
+        // `mPhasor += blockSize`. (The previous version advanced by the hop
+        // size once per process() call, making the scramble rate depend on
+        // the host's block size.)
         let phase = self.phasor;
-        self.phasor += self.engine.as_ref().unwrap().hop_size() as u32;
+        self.phasor += left.len() as u32;
 
         // ── Precompute blended indices ─────────────────────────────────
         let phasor_max = self.phasor_max;
@@ -381,14 +390,18 @@ impl AkiFxModule for BinScramblerModule {
         let blend = phase as f32 * inv_phasor_max;
 
         let num_bins = self.fft_size / 2;
-        let a = self.previous_indices();
-        let b = self.current_indices();
-        let mut blended_indices: Vec<usize> = Vec::with_capacity(num_bins);
+        // Direct field access (rather than the previous/next helpers) so the
+        // borrow checker can see these don't alias `blended_indices`.
+        let (a, b) = if self.current_ptr == 0 {
+            (&self.indices_b, &self.indices_a)
+        } else {
+            (&self.indices_a, &self.indices_b)
+        };
         for i in 0..num_bins {
             let a_idx = a[i].max(0).min(num_bins as i32 - 1) as f32;
             let b_idx = b[i].max(0).min(num_bins as i32 - 1) as f32;
             let idx = a_idx + (b_idx - a_idx) * blend;
-            blended_indices.push(idx as usize);
+            self.blended_indices[i] = idx as usize;
         }
 
         // ── Spectral processing ────────────────────────────────────────
@@ -396,24 +409,25 @@ impl AkiFxModule for BinScramblerModule {
         self.dry_buf_l[..left.len()].copy_from_slice(left);
         self.dry_buf_r[..right.len()].copy_from_slice(right);
 
-        let engine = self.engine.as_mut().expect("engine must be initialized");
+        let blended_indices: &[usize] = &self.blended_indices;
+        let scratch_polar: &mut [Polar] = &mut self.scratch_polar;
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
             &mut |_num_bins, polar| {
-                // The engine passes a single interleaved buffer:
-                // channel 0 bins at even indices, channel 1 bins at odd indices.
-                let total = polar.len();
-                let half = total / 2;
-                let mut scratch = vec![Polar::default(); total];
-
-                for i in 0..half {
-                    let src = blended_indices[i].min(half - 1);
-                    scratch[i * 2] = polar[src * 2];
-                    scratch[i * 2 + 1] = polar[src * 2 + 1];
+                // The engine invokes this callback once per channel instance
+                // with that channel's mono bin spectrum. (The previous
+                // implementation assumed an interleaved stereo buffer, so it
+                // scrambled half the bins using even/odd "channels" that do
+                // not exist.)
+                let bins = polar.len().min(blended_indices.len());
+                scratch_polar[..bins].copy_from_slice(&polar[..bins]);
+                for (i, slot) in polar[..bins].iter_mut().enumerate() {
+                    *slot = scratch_polar[blended_indices[i].min(bins - 1)];
                 }
-
-                polar[..total].copy_from_slice(&scratch[..total]);
             },
         );
     }
