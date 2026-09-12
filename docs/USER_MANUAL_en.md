@@ -393,7 +393,7 @@ All modules start bypassed. Light an LED on the rack (or at least Gain). Still s
 Only STFT/oversampling modules have algorithmic latency. The host compensates automatically; the badges are informational.
 
 **Q: Are module power states remembered?**
-Yes, they are saved with the project (since v0.2.1). Projects saved with v0.2.0 or earlier load all-bypassed once.
+Yes, they are saved with the project (since v0.2.2). Projects saved with v0.2.0 or earlier load all-bypassed once.
 
 **Q: Spectral Compressor ignores my threshold changes?**
 v0.2.0 had a defect where threshold automation never applied; please upgrade. Curve changes take effect on the following processing block.
