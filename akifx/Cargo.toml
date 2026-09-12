@@ -3,7 +3,7 @@ name = "akifx"
 version = "0.2.0"
 edition = "2021"
 authors = ["Akiro"]
-license = "ISC"
+license = "GPL-3.0"
 description = "All-in-one FX suite integrating SpectralSuite & NIH-plug plugins"
 
 [lib]

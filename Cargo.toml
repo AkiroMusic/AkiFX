@@ -3,8 +3,10 @@ resolver = "2"
 members = ["akifx", "xtask"]
 
 [workspace.dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["vst3"] }
-nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+# Pinned to the exact revision in Cargo.lock so `cargo update` cannot silently
+# move to a breaking nih-plug/egui revision.
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23", features = ["vst3"] }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
 rustfft = "6.2"
 realfft = "3.1"
 parking_lot = "0.12"
