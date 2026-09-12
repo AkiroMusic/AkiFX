@@ -1,0 +1,23 @@
+[package]
+name = "akifx"
+version = "0.2.0"
+edition = "2021"
+authors = ["Akiro"]
+license = "ISC"
+description = "All-in-one FX suite integrating SpectralSuite & NIH-plug plugins"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+# NOTE: the standalone binary keeps the DEFAULT name `akifx` because
+# nih_plug_xtask looks for `<package>.exe` when bundling the standalone.
+# This reintroduces a harmless lib/bin .pdb filename-collision warning on
+# Windows; do NOT rename the bin to fix it.
+
+[dependencies]
+nih_plug = { workspace = true, features = ["standalone"] }
+nih_plug_egui = { workspace = true }
+rustfft = { workspace = true }
+realfft = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }

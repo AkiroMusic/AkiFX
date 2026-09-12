@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target
+
+# Release artifacts (kept out of VCS; rebuild with cargo xtask bundle)
+/Releases
+
+# AI tool caches
+/.zcode
+/.omo
+/.opencode
+/.codegraph
+
+# Windows cruft
+nul
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode
+.idea

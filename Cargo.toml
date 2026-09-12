@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["akifx", "xtask"]
+
+[workspace.dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["vst3"] }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+rustfft = "6.2"
+realfft = "3.1"
+parking_lot = "0.12"
+rand = "0.8"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

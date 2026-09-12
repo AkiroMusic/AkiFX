@@ -1,0 +1,8 @@
+[package]
+name = "xtask"
+version = "0.2.0"
+edition = "2021"
+description = "A helper for compiling and bundling plugins, can be invoked using `cargo xtask`"
+
+[dependencies]
+nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug.git" }
