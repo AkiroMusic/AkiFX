@@ -101,53 +101,25 @@ impl Biquad {
 /// Parameters for the Loudness War Winner module.
 #[derive(Params)]
 pub struct LoudnessWarWinnerParams {
-    /// Hard clip threshold in dBFS. Samples exceeding ±threshold are clamped.
-    #[id = "thresh"]
-    pub threshold_db: FloatParam,
-    /// Enable cascaded bandpass filters around 5.5 kHz for K-Weighting.
-    #[id = "win"]
-    pub win_harder: BoolParam,
-    /// Bandpass center frequency (Hz).
-    #[id = "cutoff"]
-    pub cutoff_hz: FloatParam,
-    /// Output gain trim in dB, applied after clipping.
-    #[id = "trim"]
-    pub trim: FloatParam,
+    /// The output gain, set to -24 dB by default because oof ouchie. This is
+    /// a linear gain value; the hard clipper outputs `sign(x) * output_gain`.
+    #[id = "output"]
+    pub output_gain: FloatParam,
+
+    /// When non-zero, this engages a bandpass filter around 5.5 kHz to help
+    /// with the LUFS K-weighting. A fraction in `[0, 1]`; the filter's Q is
+    /// `0.00001 + factor * 30` (upstream formula).
+    #[id = "powah"]
+    pub win_harder_factor: FloatParam,
 }
 
 impl Default for LoudnessWarWinnerParams {
     fn default() -> Self {
         Self {
-            threshold_db: FloatParam::new(
-                "Threshold",
-                0.0,
-                FloatRange::Skewed {
-                    min: -80.0,
-                    max: 0.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_smoother(SmoothingStyle::Logarithmic(10.0))
-            .with_unit(" dB")
-            .with_value_to_string(formatters::v2s_f32_rounded(2))
-            .with_string_to_value(Arc::new(|s: &str| s.parse::<f32>().ok())),
-            win_harder: BoolParam::new("WIN HARDER", false),
-            cutoff_hz: FloatParam::new(
-                "Cutoff",
-                BP_FREQUENCY,
-                FloatRange::Skewed {
-                    min: 100.0,
-                    max: 20000.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_smoother(SmoothingStyle::Linear(30.0))
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_hz_then_khz(0))
-            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
-            trim: FloatParam::new(
-                "Trim",
-                util::db_to_gain(0.0),
+            output_gain: FloatParam::new(
+                "Output Gain",
+                util::db_to_gain(-24.0),
+                // Representing gain in decibels keeps the range logarithmic
                 FloatRange::Linear {
                     min: util::db_to_gain(-24.0),
                     max: util::db_to_gain(0.0),
@@ -157,13 +129,24 @@ impl Default for LoudnessWarWinnerParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            win_harder_factor: FloatParam::new(
+                "WIN HARDER",
+                0.0,
+                // This ramps up hard, so keep the "usable" value range larger
+                FloatRange::Skewed {
+                    min: 0.0,
+                    max: 1.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            )
+            .with_smoother(SmoothingStyle::Linear(30.0))
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
         }
     }
 }
 
-// ── Module ──────────────────────────────────────────────────────────────────
-
-/// Loudness War Winner — hard clipper with optional bandpass "win harder" path.
 pub struct LoudnessWarWinnerModule {
     params: Arc<LoudnessWarWinnerParams>,
     bypass: Arc<AtomicBool>,
@@ -198,13 +181,13 @@ impl LoudnessWarWinnerModule {
         Self::new(params, bypass)
     }
 
+    /// Update the bandpass coefficients, stepping the WIN HARDER smoother.
+    /// Only called during processing while that smoother is moving (upstream
+    /// contract). Q = `0.00001 + factor * 30` — at factor 0 the filter is an
+    /// extremely narrow spike, which is exactly the upstream behaviour.
     fn update_bp_filters(&mut self) {
-        let cutoff = self.params.cutoff_hz.value();
-        // `0.00001 + 30.0` is a faithful transcription of the upstream JSFX,
-        // where the epsilon guards a variable Q expression that was collapsed
-        // here to the constant full-Q case (~30.0). Kept verbatim on purpose.
-        let q = 0.00001 + 30.0;
-        let coeffs = BiquadCoefficients::bandpass(self.sample_rate, cutoff, q);
+        let q = 0.00001 + (self.params.win_harder_factor.smoothed.next() * 30.0);
+        let coeffs = BiquadCoefficients::bandpass(self.sample_rate, BP_FREQUENCY, q);
         for filters in &mut self.bp_filters {
             for filter in filters {
                 filter.coefficients = coeffs;
@@ -229,6 +212,15 @@ impl AkiFxModule for LoudnessWarWinnerModule {
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
         self.bp_filters.resize(2, [Biquad::default(); 4]);
+        // Seed the smoothers so non-host contexts don't ramp from zero.
+        self.params
+            .output_gain
+            .smoothed
+            .reset(self.params.output_gain.value());
+        self.params
+            .win_harder_factor
+            .smoothed
+            .reset(self.params.win_harder_factor.value());
         self.update_bp_filters();
         self.silence_fadeout_start_samples =
             (SILENCE_FADEOUT_START_MS / 1000.0 * sample_rate).round() as u32;
@@ -248,213 +240,170 @@ impl AkiFxModule for LoudnessWarWinnerModule {
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        let threshold = util::db_to_gain(self.params.threshold_db.value());
-        let trim = self.params.trim.value();
-        let apply_bp = self.params.win_harder.value();
+        // Per-sample processing exactly like upstream (iter_samples):
+        for i in 0..left.len() {
+            let output_gain = self.params.output_gain.smoothed.next();
 
-        if apply_bp {
-            self.update_bp_filters();
-        }
+            // While WIN HARDER is moving, keep its bandpass coefficients
+            // gliding (upstream steps the factor smoother here).
+            if self.params.win_harder_factor.smoothed.is_smoothing() {
+                self.update_bp_filters();
+            }
+            let apply_bp_filters = self.params.win_harder_factor.smoothed.previous_value() > 0.0;
 
-        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let input_silent = *l == 0.0 && *r == 0.0;
+            let mut l = left[i];
+            let mut r = right[i];
 
-            // Bandpass filter chain if WIN HARDER is engaged
-            if apply_bp {
+            let input_silent = l == 0.0 && r == 0.0;
+
+            // Optional 5.5 kHz bandpass cascade for extra K-weighting "pain"
+            if apply_bp_filters {
                 if let Some(filters) = self.bp_filters.get_mut(0) {
                     for filter in filters {
-                        *l = filter.process(*l);
+                        l = filter.process(l);
                     }
                 }
                 if let Some(filters) = self.bp_filters.get_mut(1) {
                     for filter in filters {
-                        *r = filter.process(*r);
+                        r = filter.process(r);
                     }
                 }
             }
 
-            // Hard clip to +/-threshold, then apply trim
-            *l = clamp_and_trim(*l, threshold, trim);
-            *r = clamp_and_trim(*r, threshold, trim);
+            // The "limiter": a sign hard clip scaled by the output gain.
+            l = if l >= 0.0 { 1.0 } else { -1.0 } * output_gain;
+            r = if r >= 0.0 { 1.0 } else { -1.0 } * output_gain;
 
-            // Silence fadeout to avoid constant DC on silent input
+            // Fade into silence after prolonged silence to avoid constant DC
             if input_silent {
                 self.num_silent_samples += 1;
                 if self.num_silent_samples >= self.silence_fadeout_end_samples {
-                    *l = 0.0;
-                    *r = 0.0;
+                    l = 0.0;
+                    r = 0.0;
                 } else if self.num_silent_samples >= self.silence_fadeout_start_samples {
                     let fadeout_gain = 1.0
                         - ((self.num_silent_samples - self.silence_fadeout_start_samples) as f32
                             / self.silence_fadeout_length_samples as f32);
-                    *l *= fadeout_gain;
-                    *r *= fadeout_gain;
+                    l *= fadeout_gain;
+                    r *= fadeout_gain;
                 }
             } else {
                 self.num_silent_samples = 0;
             }
+
+            left[i] = l;
+            right[i] = r;
         }
     }
-}
-
-/// Hard clip sample to +/-threshold, then multiply by trim.
-#[inline]
-fn clamp_and_trim(sample: f32, threshold: f32, trim: f32) -> f32 {
-    let clamped = if sample > threshold {
-        threshold
-    } else if sample < -threshold {
-        -threshold
-    } else {
-        sample
-    };
-    clamped * trim
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Build params with specific values for testing.
-    fn test_params(
-        threshold_db: f32,
-        win_harder: bool,
-        trim_db: f32,
-    ) -> Arc<LoudnessWarWinnerParams> {
-        Arc::new(LoudnessWarWinnerParams {
-            threshold_db: FloatParam::new(
-                "Threshold",
-                threshold_db,
-                FloatRange::Skewed {
-                    min: -80.0,
-                    max: 0.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_smoother(SmoothingStyle::Logarithmic(10.0))
-            .with_unit(" dB")
-            .with_value_to_string(formatters::v2s_f32_rounded(2))
-            .with_string_to_value(Arc::new(|s: &str| s.parse::<f32>().ok())),
-            win_harder: BoolParam::new("WIN HARDER", win_harder),
-            cutoff_hz: FloatParam::new(
-                "Cutoff",
-                BP_FREQUENCY,
-                FloatRange::Skewed {
-                    min: 100.0,
-                    max: 20000.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            )
-            .with_smoother(SmoothingStyle::Linear(30.0))
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_hz_then_khz(0))
-            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
-            trim: FloatParam::new(
-                "Trim",
-                util::db_to_gain(trim_db),
+    const SR: f32 = 44100.0;
+    const BLOCK: usize = 512;
+
+    /// A module initialised with the default params (output gain -24 dB,
+    /// WIN HARDER off), seeded like the host would.
+    fn make_module() -> LoudnessWarWinnerModule {
+        let mut m = LoudnessWarWinnerModule::with_defaults();
+        m.initialize(SR, BLOCK);
+        m
+    }
+
+    fn sine(freq: f32, n: usize, amp: f32) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / SR).sin() * amp)
+            .collect()
+    }
+
+    /// Upstream behaviour: every non-silent sample becomes
+    /// `sign(x) * output_gain` — a full-scale square wave at the output gain
+    /// (default -24 dB), regardless of how quiet the input was.
+    #[test]
+    fn nonzero_input_becomes_square_at_output_gain() {
+        let mut m = make_module();
+        let mut left = sine(220.0, BLOCK, 0.125);
+        let mut right = left.clone();
+        m.process(&mut left, &mut right);
+
+        let expected = util::db_to_gain(-24.0);
+        for i in 1..BLOCK {
+            assert!(
+                (left[i].abs() - expected).abs() < 1e-4 || left[i] == 0.0,
+                "sample {i} should be a +/-gain square, got {}",
+                left[i]
+            );
+        }
+    }
+
+    /// After reset() the module starts in the "silent" state, so a silent
+    /// input stays fully muted (no DC square).
+    #[test]
+    fn silence_fades_out_to_zero() {
+        let mut m = make_module();
+        m.reset();
+        let mut left = vec![0.0f32; BLOCK];
+        let mut right = vec![0.0f32; BLOCK];
+        m.process(&mut left, &mut right);
+        assert!(left.iter().all(|s| *s == 0.0), "silence must stay muted");
+    }
+
+    /// WIN HARDER engaged (factor > 0) still yields the square output; its
+    /// bandpass only reshapes the sign pattern of the input.
+    #[test]
+    fn win_harder_still_outputs_square() {
+        let params = Arc::new(LoudnessWarWinnerParams {
+            output_gain: FloatParam::new(
+                "Output Gain",
+                util::db_to_gain(-24.0),
                 FloatRange::Linear {
                     min: util::db_to_gain(-24.0),
                     max: util::db_to_gain(0.0),
                 },
             )
-            .with_smoother(SmoothingStyle::Logarithmic(10.0))
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
-        })
-    }
-
-    fn make_module(
-        threshold_db: f32,
-        win_harder: bool,
-        trim_db: f32,
-    ) -> LoudnessWarWinnerModule {
-        let params = test_params(threshold_db, win_harder, trim_db);
+            win_harder_factor: FloatParam::new(
+                "WIN HARDER",
+                1.0,
+                FloatRange::Skewed {
+                    min: 0.0,
+                    max: 1.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+        });
         let bypass = Arc::new(AtomicBool::new(false));
         let mut m = LoudnessWarWinnerModule::new(params, bypass);
-        m.initialize(44100.0, 512);
-        m
-    }
+        m.initialize(SR, BLOCK);
 
-    #[test]
-    fn sine_above_threshold_gets_clamped() {
-        let mut m = make_module(-6.0, false, 0.0);
-        let expected = util::db_to_gain(-6.0);
-        let mut left = vec![0.9f32; 64];
-        let mut right = vec![0.9f32; 64];
+        let mut left = sine(440.0, BLOCK, 0.5);
+        let mut right = left.clone();
         m.process(&mut left, &mut right);
-        for (l, r) in left.iter().zip(right.iter()) {
-            assert!(
-                (l - expected).abs() < 1e-4,
-                "left sample {l} not within 1e-4 of {expected}"
-            );
-            assert!(
-                (r - expected).abs() < 1e-4,
-                "right sample {r} not within 1e-4 of {expected}"
-            );
-        }
-    }
 
-    #[test]
-    fn quiet_input_passes_through() {
-        let mut m = make_module(0.0, false, 0.0);
-        let input_val = 0.01f32;
-        let mut left = vec![input_val; 64];
-        let mut right = vec![input_val; 64];
-        m.process(&mut left, &mut right);
-        let max_diff = left
+        let expected = util::db_to_gain(-24.0);
+        let squares = left
             .iter()
-            .zip(right.iter())
-            .map(|(l, r)| (l - input_val).abs().max((r - input_val).abs()))
-            .fold(0.0f32, f32::max);
-        assert!(max_diff < 1e-6, "max diff {max_diff} exceeds 1e-6");
+            .filter(|s| ((s.abs() - expected).abs() < 1e-4 || **s == 0.0))
+            .count();
+        assert!(
+            squares > BLOCK * 9 / 10,
+            "output should be almost entirely square, squares={squares}"
+        );
     }
 
+    /// reset() must re-enter the "silent" state so a freshly inserted,
+    /// silent instance doesn't emit the DC square.
     #[test]
-    fn win_harder_bounded_near_threshold() {
-        let mut m = make_module(-6.0, true, 0.0);
-        let threshold = util::db_to_gain(-6.0);
-        let mut left = vec![0.5f32; 256];
-        let mut right = vec![0.5f32; 256];
-        m.process(&mut left, &mut right);
-        // After the initial transient, output should be bounded by threshold
-        for sample in left[64..].iter().chain(right[64..].iter()) {
-            assert!(
-                sample.abs() <= threshold + 1e-4,
-                "sample {} exceeds threshold {threshold}",
-                sample
-            );
-        }
-    }
-
-    #[test]
-    fn reset_clears_filter_state() {
-        // Process an impulse, save output, reset, process again — should match
-        let params = test_params(-6.0, true, 0.0);
-        let bypass = Arc::new(AtomicBool::new(false));
-
-        let mut m1 = LoudnessWarWinnerModule::new(params.clone(), bypass.clone());
-        m1.initialize(44100.0, 512);
-        let mut left1 = vec![0.0f32; 128];
-        let mut right1 = vec![0.0f32; 128];
-        left1[0] = 1.0;
-        right1[0] = 1.0;
-        m1.process(&mut left1, &mut right1);
-
-        let mut m2 = LoudnessWarWinnerModule::new(params, bypass);
-        m2.initialize(44100.0, 512);
-        // m2 is freshly initialized — reset() then process
-        m2.reset();
-        let mut left2 = vec![0.0f32; 128];
-        let mut right2 = vec![0.0f32; 128];
-        left2[0] = 1.0;
-        right2[0] = 1.0;
-        m2.process(&mut left2, &mut right2);
-
-        for (a, b) in left1.iter().zip(left2.iter()) {
-            assert!((a - b).abs() < 1e-6, "left mismatch: {a} vs {b}");
-        }
-        for (a, b) in right1.iter().zip(right2.iter()) {
-            assert!((a - b).abs() < 1e-6, "right mismatch: {a} vs {b}");
-        }
+    fn reset_starts_silent() {
+        let mut m = make_module();
+        m.reset();
+        assert_eq!(m.num_silent_samples, m.silence_fadeout_end_samples);
     }
 }

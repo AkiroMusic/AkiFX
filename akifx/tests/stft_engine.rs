@@ -17,10 +17,13 @@ fn identity_reconstruction() {
     };
     let mut engine = SpectralEngine::new(config, 1);
     let latency = engine.latency_samples();
-    assert_eq!(latency, fft_size);
+    // Reported latency is fft_size + hop_size (fft/4), matching the C++
+    // plugins' conservative report; the true signal delay is fft_size.
+    assert_eq!(latency, fft_size + fft_size / 4);
+    let true_delay = fft_size;
 
     // Feed a smooth signal (low-frequency sine) through identity callback
-    let total = latency + fft_size * 4;
+    let total = true_delay + fft_size * 4;
     let sample_rate = 44100.0f32;
     let freq = 100.0f32;
     let input: Vec<f32> = (0..total)
@@ -34,9 +37,10 @@ fn identity_reconstruction() {
         &mut |_num_bins, _chan, _overlap, _polar| { /* identity */ },
     );
 
-    // Compare output to input (output is delayed by latency_samples)
-    // output[n] ≈ gain * input[n - latency]
-    let trim_start = latency;
+    // Compare output to input (output is delayed by the true signal delay,
+    // fft_size — the reported latency adds a conservative hop)
+    // output[n] ≈ gain * input[n - true_delay]
+    let trim_start = true_delay;
     let trim_end = output.len() - fft_size;
     if trim_start >= trim_end {
         return;
@@ -152,7 +156,8 @@ fn sine_440hz_correlation() {
         sample_offset += block_size;
     }
 
-    let trim = latency + fft_size;
+    // True signal delay is fft_size (reported latency adds a hop)
+    let trim = latency - fft_size / 4 + fft_size;
     let end = all_output.len().saturating_sub(fft_size);
     if trim >= end {
         return;
@@ -161,7 +166,7 @@ fn sine_440hz_correlation() {
 
     let ref_signal: Vec<f32> = (0..out_slice.len())
         .map(|i| {
-            let t = (trim + i - latency) as f32 / sample_rate;
+            let t = (trim + i - (latency - fft_size / 4)) as f32 / sample_rate;
             (2.0 * std::f32::consts::PI * freq * t).sin()
         })
         .collect();

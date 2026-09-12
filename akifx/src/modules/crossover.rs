@@ -502,7 +502,12 @@ impl Default for CrossoverParams {
 pub struct CrossoverModule {
     params: Arc<CrossoverParams>,
     bypass: Arc<AtomicBool>,
-    iir_crossover: IirCrossover,
+    /// One IIR crossover per channel with independent filter state, matching
+    /// upstream's `Biquad<f32x2>` dual-lane design. (An earlier port ran both
+    /// channels sequentially through one state set, so the right channel
+    /// inherited the left channel's residual filter state.) Coefficients are
+    /// kept identical across the two instances.
+    iir_crossovers: [IirCrossover; 2],
     sample_rate: f32,
     /// Filter-band count and frequencies the coefficients were last built
     /// with, so `process()` can rebuild them when automation changes the
@@ -518,7 +523,7 @@ impl CrossoverModule {
         Self {
             params,
             bypass,
-            iir_crossover: IirCrossover::default(),
+            iir_crossovers: [IirCrossover::default(), IirCrossover::default()],
             sample_rate: 44100.0,
             cached_num_bands: 0,
             cached_frequencies: [-1.0; MAX_BANDS - 1],
@@ -557,10 +562,62 @@ impl CrossoverModule {
     fn update_filters(&mut self) {
         let num_bands = self.params.num_bands.value() as usize;
         let frequencies = self.crossover_frequencies();
-        self.iir_crossover
-            .update(self.sample_rate, num_bands, &frequencies);
+        for crossover in &mut self.iir_crossovers {
+            crossover.update(self.sample_rate, num_bands, &frequencies);
+        }
         self.cached_num_bands = num_bands;
         self.cached_frequencies = frequencies;
+    }
+
+    /// Per-sample coefficient update while the frequency smoothers are
+    /// moving (mirrors upstream's `should_update_filters()`/`update_filters(1)`
+    /// pair).
+    fn update_filters_while_smoothing(&mut self) {
+        let smoothing = self.params.crossover_1_freq.smoothed.is_smoothing()
+            || self.params.crossover_2_freq.smoothed.is_smoothing()
+            || self.params.crossover_3_freq.smoothed.is_smoothing()
+            || self.params.crossover_4_freq.smoothed.is_smoothing();
+        if !smoothing {
+            return;
+        }
+        let num_bands = self.params.num_bands.value() as usize;
+        let frequencies = [
+            self.params.crossover_1_freq.smoothed.next_step(1),
+            self.params.crossover_2_freq.smoothed.next_step(1),
+            self.params.crossover_3_freq.smoothed.next_step(1),
+            self.params.crossover_4_freq.smoothed.next_step(1),
+        ];
+        for crossover in &mut self.iir_crossovers {
+            crossover.update(self.sample_rate, num_bands, &frequencies);
+        }
+        self.cached_num_bands = num_bands;
+        self.cached_frequencies = frequencies;
+    }
+
+    /// Seed the parameter smoothers (non-host contexts start from zero
+    /// otherwise).
+    fn seed_smoothers(&mut self) {
+        self.params
+            .crossover_1_freq
+            .smoothed
+            .reset(self.params.crossover_1_freq.value());
+        self.params
+            .crossover_2_freq
+            .smoothed
+            .reset(self.params.crossover_2_freq.value());
+        self.params
+            .crossover_3_freq
+            .smoothed
+            .reset(self.params.crossover_3_freq.value());
+        self.params
+            .crossover_4_freq
+            .smoothed
+            .reset(self.params.crossover_4_freq.value());
+        self.params.band_1_gain.smoothed.reset(self.params.band_1_gain.value());
+        self.params.band_2_gain.smoothed.reset(self.params.band_2_gain.value());
+        self.params.band_3_gain.smoothed.reset(self.params.band_3_gain.value());
+        self.params.band_4_gain.smoothed.reset(self.params.band_4_gain.value());
+        self.params.band_5_gain.smoothed.reset(self.params.band_5_gain.value());
     }
 
     /// Rebuild the filter coefficients if the band count or crossover
@@ -589,11 +646,14 @@ impl AkiFxModule for CrossoverModule {
 
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
+        self.seed_smoothers();
         self.update_filters();
     }
 
     fn reset(&mut self) {
-        self.iir_crossover.reset();
+        for crossover in &mut self.iir_crossovers {
+            crossover.reset();
+        }
         self.update_filters();
     }
 
@@ -601,29 +661,33 @@ impl AkiFxModule for CrossoverModule {
         // Rebuild coefficients when automation moved the crossover points.
         self.update_filters_if_changed();
 
-        let num_bands = self.params.num_bands.value() as usize;
-        let gains = self.band_gains();
+        for i in 0..left.len() {
+            // Glide the crossover frequencies while their smoothers move
+            // (upstream updates coefficients per sample while smoothing).
+            self.update_filters_while_smoothing();
 
-        // Process left channel
-        for sample in left.iter_mut() {
-            let bands = self.iir_crossover.process(num_bands, *sample);
+            let num_bands = self.params.num_bands.value() as usize;
+            // Band gains are port additions; smooth them per sample too.
+            let gains = [
+                self.params.band_1_gain.smoothed.next(),
+                self.params.band_2_gain.smoothed.next(),
+                self.params.band_3_gain.smoothed.next(),
+                self.params.band_4_gain.smoothed.next(),
+                self.params.band_5_gain.smoothed.next(),
+            ];
 
-            let mut sum = 0.0;
-            for i in 0..num_bands {
-                sum += bands[i] * gains[i];
+            // Both channels pass through their own filter instance.
+            let bands_l = self.iir_crossovers[0].process(num_bands, left[i]);
+            let bands_r = self.iir_crossovers[1].process(num_bands, right[i]);
+
+            let mut sum_l = 0.0;
+            let mut sum_r = 0.0;
+            for b in 0..num_bands {
+                sum_l += bands_l[b] * gains[b];
+                sum_r += bands_r[b] * gains[b];
             }
-            *sample = sum;
-        }
-
-        // Process right channel
-        for sample in right.iter_mut() {
-            let bands = self.iir_crossover.process(num_bands, *sample);
-
-            let mut sum = 0.0;
-            for i in 0..num_bands {
-                sum += bands[i] * gains[i];
-            }
-            *sample = sum;
+            left[i] = sum_l;
+            right[i] = sum_r;
         }
     }
 }

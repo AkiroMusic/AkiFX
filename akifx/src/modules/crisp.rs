@@ -492,10 +492,62 @@ impl CrispModule {
         let sample = self.rm_input_lpf[channel_idx].process(sample);
         match self.params.mode.value() {
             Mode::Soggy => sample * noise,
+            // NOTE: upstream nih-plug uses `max(0.0)` for BOTH crispy modes
+            // (CrispyNegated is literally identical to Crispy there — an
+            // upstream quirk kept for fidelity even though the name suggests
+            // a `min(0.0)` variant).
             Mode::Crispy => sample.max(0.0) * noise,
-            // Ring-modulate only the negative part of the signal (this used
-            // to be a copy of Crispy, making the mode a no-op duplicate).
-            Mode::CrispyNegated => sample.min(0.0) * noise,
+            Mode::CrispyNegated => sample.max(0.0) * noise,
+        }
+    }
+
+    /// Step and apply any coefficient smoothers that are currently moving,
+    /// once per sample (mirrors upstream's maybe_update_filters).
+    fn maybe_update_filters(&mut self) {
+        if self.params.rm_input_lpf_freq.smoothed.is_smoothing()
+            || self.params.rm_input_lpf_q.smoothed.is_smoothing()
+        {
+            self.update_rm_input_lpf();
+        }
+        if self.params.noise_hpf_freq.smoothed.is_smoothing()
+            || self.params.noise_hpf_q.smoothed.is_smoothing()
+        {
+            self.update_noise_hpf();
+        }
+        if self.params.noise_lpf_freq.smoothed.is_smoothing()
+            || self.params.noise_lpf_q.smoothed.is_smoothing()
+        {
+            self.update_noise_lpf();
+        }
+    }
+
+    /// Update the pre-RM low-pass coefficients, stepping its smoothers.
+    fn update_rm_input_lpf(&mut self) {
+        let frequency = self.params.rm_input_lpf_freq.smoothed.next();
+        let q = self.params.rm_input_lpf_q.smoothed.next();
+        let coefficients = BiquadCoefficients::lowpass(self.sample_rate, frequency, q);
+        for filter in &mut self.rm_input_lpf {
+            filter.coefficients = coefficients;
+        }
+    }
+
+    /// Update the noise high-pass coefficients, stepping its smoothers.
+    fn update_noise_hpf(&mut self) {
+        let frequency = self.params.noise_hpf_freq.smoothed.next();
+        let q = self.params.noise_hpf_q.smoothed.next();
+        let coefficients = BiquadCoefficients::highpass(self.sample_rate, frequency, q);
+        for filter in &mut self.noise_hpf {
+            filter.coefficients = coefficients;
+        }
+    }
+
+    /// Update the noise low-pass coefficients, stepping its smoothers.
+    fn update_noise_lpf(&mut self) {
+        let frequency = self.params.noise_lpf_freq.smoothed.next();
+        let q = self.params.noise_lpf_q.smoothed.next();
+        let coefficients = BiquadCoefficients::lowpass(self.sample_rate, frequency, q);
+        for filter in &mut self.noise_lpf {
+            filter.coefficients = coefficients;
         }
     }
 
@@ -540,6 +592,40 @@ impl AkiFxModule for CrispModule {
 
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
+        // Seed all smoothers so non-host contexts (tests, standalone) don't
+        // ramp from zero (an unseeded amount smoother silenced the module).
+        self.params
+            .amount
+            .smoothed
+            .reset(self.params.amount.value());
+        self.params
+            .output_gain
+            .smoothed
+            .reset(self.params.output_gain.value());
+        self.params
+            .rm_input_lpf_freq
+            .smoothed
+            .reset(self.params.rm_input_lpf_freq.value());
+        self.params
+            .rm_input_lpf_q
+            .smoothed
+            .reset(self.params.rm_input_lpf_q.value());
+        self.params
+            .noise_hpf_freq
+            .smoothed
+            .reset(self.params.noise_hpf_freq.value());
+        self.params
+            .noise_hpf_q
+            .smoothed
+            .reset(self.params.noise_hpf_q.value());
+        self.params
+            .noise_lpf_freq
+            .smoothed
+            .reset(self.params.noise_lpf_freq.value());
+        self.params
+            .noise_lpf_q
+            .smoothed
+            .reset(self.params.noise_lpf_q.value());
         self.update_filter_coefficients();
     }
 
@@ -557,15 +643,17 @@ impl AkiFxModule for CrispModule {
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        // Recompute filter coefficients from current param values.
-        self.update_filter_coefficients();
-
-        let amount = self.params.amount.value() * AMOUNT_GAIN_MULTIPLIER;
-        let output_gain = self.params.output_gain.value();
         let wet_only = self.params.wet_only.value();
         let stereo = self.params.stereo_mode.value() == StereoMode::Stereo;
 
+        // Smooth per sample exactly like upstream: `amount`/`output_gain`
+        // step every sample, and filter coefficients are rebuilt while their
+        // frequency/Q smoothers are moving. (The previous port read raw
+        // values once per block, producing zipper noise on automation.)
         for i in 0..left.len() {
+            let amount = self.params.amount.smoothed.next() * AMOUNT_GAIN_MULTIPLIER;
+            self.maybe_update_filters();
+
             let (rm_l, rm_r) = if stereo {
                 let noise_l = self.gen_noise(0);
                 let noise_r = self.gen_noise(1);
@@ -581,6 +669,7 @@ impl AkiFxModule for CrispModule {
                 )
             };
 
+            let output_gain = self.params.output_gain.smoothed.next();
             if wet_only {
                 left[i] = rm_l * output_gain;
                 right[i] = rm_r * output_gain;

@@ -269,10 +269,29 @@ impl DiopserModule {
     /// Faithfully ports `Diopser::update_filters()` from the source, including
     /// the spread-style distribution math. Called lazily when parameters change.
     fn update_filters(&mut self) {
+        self.update_filters_impl(
+            self.params.filter_frequency.value(),
+            self.params.filter_resonance.value(),
+            self.params.filter_spread_octaves.value(),
+        );
+    }
+
+    /// Update coefficients from the smoothers' next step, for per-sample
+    /// gliding while they are moving (upstream steps these every sample at
+    /// the default automation precision).
+    fn update_filters_smoothed(&mut self) {
+        self.update_filters_impl(
+            self.params.filter_frequency.smoothed.next_step(1),
+            self.params.filter_resonance.smoothed.next_step(1),
+            self.params.filter_spread_octaves.smoothed.next_step(1),
+        );
+    }
+
+    fn update_filters_impl(&mut self, raw_frequency: f32, raw_resonance: f32, raw_spread: f32) {
         let sample_rate = self.sample_rate;
-        let frequency = self.params.filter_frequency.value().max(MIN_FREQUENCY);
-        let resonance = self.params.filter_resonance.value().max(0.01);
-        let spread_octaves = self.params.filter_spread_octaves.value();
+        let frequency = raw_frequency.max(MIN_FREQUENCY);
+        let resonance = raw_resonance.max(0.01);
+        let spread_octaves = raw_spread;
         let spread_style = self.params.filter_spread_style.value();
         let num_stages = self.params.filter_stages.value() as usize;
 
@@ -342,6 +361,19 @@ impl AkiFxModule for DiopserModule {
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
         self.should_update_filters = true;
+        // Seed the smoothers so non-host contexts don't glide from zero.
+        self.params
+            .filter_frequency
+            .smoothed
+            .reset(self.params.filter_frequency.value());
+        self.params
+            .filter_resonance
+            .smoothed
+            .reset(self.params.filter_resonance.value());
+        self.params
+            .filter_spread_octaves
+            .smoothed
+            .reset(self.params.filter_spread_octaves.value());
     }
 
     fn reset(&mut self) {
@@ -361,8 +393,18 @@ impl AkiFxModule for DiopserModule {
 
         let num_stages = (self.params.filter_stages.value() as usize).min(MAX_NUM_FILTERS);
 
-        // Process each sample through the cascade
+        // Process each sample through the cascade. While a parameter's
+        // smoother is moving, coefficients are rebuilt every sample so the
+        // filter glides instead of jumping (upstream behaviour; the
+        // previously-declared smoothers were never stepped at all).
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+            if self.params.filter_frequency.smoothed.is_smoothing()
+                || self.params.filter_resonance.smoothed.is_smoothing()
+                || self.params.filter_spread_octaves.smoothed.is_smoothing()
+            {
+                self.update_filters_smoothed();
+            }
+
             // Left channel
             let mut sample_l = *l;
             for filter in self.filters[0][..num_stages].iter_mut() {
