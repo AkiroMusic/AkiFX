@@ -125,3 +125,46 @@ impl AkiFxModule for GainModule {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn module_at_gain_db(db: f32) -> GainModule {
+        let params = Arc::new(GainParams::new(db));
+        let bypass = Arc::new(AtomicBool::new(false));
+        let mut m = GainModule::new(params, bypass);
+        m.initialize(44100.0, 512);
+        m
+    }
+
+    #[test]
+    fn zero_db_is_identity() {
+        let mut m = module_at_gain_db(0.0);
+        let mut left: Vec<f32> = (0..64).map(|i| (i as f32 * 0.05).sin()).collect();
+        let mut right = left.clone();
+        let (l0, r0) = (left.clone(), right.clone());
+        m.process(&mut left, &mut right);
+        for i in 0..64 {
+            assert!((left[i] - l0[i]).abs() < 1e-6, "0 dB must be unity at {i}");
+            assert!((right[i] - r0[i]).abs() < 1e-6, "0 dB must be unity at {i}");
+        }
+    }
+
+    #[test]
+    fn minus_six_db_halves_amplitude() {
+        let mut m = module_at_gain_db(-6.0);
+        let mut left = vec![0.5f32; 64];
+        let mut right = vec![0.5f32; 64];
+        m.process(&mut left, &mut right);
+        let expected = 0.5 * util::db_to_gain(-6.0);
+        for i in 0..64 {
+            assert!(
+                (left[i] - expected).abs() < 1e-4,
+                "-6 dB must halve amplitude at {i}: {} vs {}",
+                left[i], expected
+            );
+            assert!((right[i] - expected).abs() < 1e-4);
+        }
+    }
+}

@@ -269,3 +269,63 @@ fn varying_block_sizes_no_panic() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Regression: blocks that are not multiples of the hop size must not drop
+// samples. The chunked implementation used to lose input/output samples
+// whenever instance offsets overshot fft_size (e.g. 480-sample blocks with a
+// 128-sample hop), producing periodic dropouts. With a DC-ish input and an
+// identity callback, a correct engine reconstructs the constant everywhere —
+// a dropped segment would appear as a run of (near-)zeros.
+// ---------------------------------------------------------------------------
+#[test]
+fn non_hop_multiple_blocks_conserve_signal() {
+    let fft_size = 512;
+    let config = SpectralConfig {
+        fft_size,
+        overlap_count: 4,
+        window: WindowType::Hann,
+    };
+    let mut engine = SpectralEngine::new(config, 2);
+
+    let amplitude = 0.25f32;
+    let block_size = 480; // not a multiple of hop = 128
+
+    let mut min_mag = f32::INFINITY;
+    let mut max_mag = 0.0f32;
+    let mut saw_nan = false;
+
+    // Two seconds' worth of blocks; skip the fft_size warmup.
+    let mut produced: Vec<f32> = Vec::new();
+    for _ in 0..200 {
+        let input = vec![amplitude; block_size];
+        let mut out0 = vec![0.0f32; block_size];
+        let mut out1 = vec![0.0f32; block_size];
+        engine.process(
+            &[&input, &input],
+            &mut [&mut out0, &mut out1],
+            &mut |num_bins, polar| {
+                let _ = num_bins;
+                let _ = polar;
+                // identity
+            },
+        );
+        produced.extend_from_slice(&out0);
+    }
+
+    for &sample in &produced[fft_size..] {
+        saw_nan |= sample.is_nan();
+        min_mag = min_mag.min(sample.abs());
+        max_mag = max_mag.max(sample.abs());
+    }
+
+    assert!(!saw_nan, "no NaN in steady-state output");
+    assert!(
+        min_mag > 0.15,
+        "steady-state output must stay near {amplitude} (min |out| = {min_mag});          near-zero runs indicate dropped samples"
+    );
+    assert!(
+        max_mag < 1.0,
+        "steady-state output must stay bounded (max |out| = {max_mag})"
+    );
+}

@@ -413,6 +413,30 @@ mod tests {
         assert_eq!(chain.latency_samples(), 0);
     }
 
+    /// The plugin re-reports latency to the host from process(); this test
+    /// verifies the chain's value actually moves when a module is toggled,
+    /// which is what keeps DAW delay compensation in sync.
+    #[test]
+    fn latency_updates_when_module_toggles() {
+        let mut chain = ModuleChain::new();
+        chain.push(Box::new(LatencyModule::new(100)));
+        chain.push(Box::new(LatencyModule::new(2048)));
+
+        assert_eq!(chain.latency_samples(), 2148);
+
+        // Toggle the high-latency module off via its shared flag.
+        chain.modules_mut()[1]
+            .bypass_flag()
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(chain.latency_samples(), 100);
+
+        // And back on.
+        chain.modules_mut()[1]
+            .bypass_flag()
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(chain.latency_samples(), 2148);
+    }
+
     #[test]
     fn latency_all_bypassed_is_zero() {
         let mut chain = ModuleChain::new();

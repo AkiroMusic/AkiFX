@@ -665,6 +665,63 @@ mod tests {
 
     // ── Test 5: Silence → silence ─────────────────────────────────────
 
+    /// Regression: after the callback was rewritten to the engine's real
+    /// per-channel mono-bin contract, a fully-scrambled pass must still
+    /// deliver energy (a permutation of bins) and never NaN.
+    #[test]
+    fn scrambled_output_has_energy_and_no_nan() {
+        let params = Arc::new(BinScramblerParams {
+            scramble: FloatParam::new(
+                "Scramble",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            scatter: FloatParam::new(
+                "Scatter",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            rate: FloatParam::new(
+                "Rate",
+                4.0,
+                FloatRange::Linear { min: 0.25, max: 15.0 },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(Arc::new(|v| format!("{v:.2} Hz"))),
+            seed: IntParam::new("Random Seed", 7, IntRange::Linear { min: 0, max: 9999 }),
+        });
+        let bypass = Arc::new(AtomicBool::new(false));
+        let mut m = BinScramblerModule::new(params, bypass);
+        m.initialize(SR, BLOCK);
+
+        let n = BLOCK * 8;
+        let mut left: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SR).sin() * 0.5)
+            .collect();
+        let mut right = left.clone();
+
+        // Process in host-sized chunks.
+        for chunk in left.chunks_mut(BLOCK).zip(right.chunks_mut(BLOCK)) {
+            let (l, r) = chunk;
+            m.process(l, r);
+        }
+
+        // Skip the FFT warmup (fft_size + hop margin).
+        let tail = &left[2048..];
+        assert!(!tail.iter().any(|s| s.is_nan()), "no NaN in scrambled output");
+        let rms = (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt();
+        assert!(
+            rms > 0.01,
+            "scrambled output must retain energy, rms={rms}"
+        );
+    }
+
     #[test]
     fn silence_remains_silent() {
         let mut module = make_module_with_params(0.5, 0.4, 2.0);
