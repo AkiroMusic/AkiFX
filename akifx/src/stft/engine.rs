@@ -13,8 +13,9 @@
 //! * Forward FFT is **unscaled** (standard DFT, same as kissfft).
 //! * First `half_size` bins are multiplied by `2 / fft_size`.
 //! * `pol2Car` fills bins `0..half_size` from polar, zeros `half_size..fft_size`.
-//! * Inverse FFT is **unscaled** (rustfft default).  kissfft normalises by
-//!   `1/N` so we apply that explicitly after the inverse.
+//! * Inverse FFT is **unscaled** (rustfft default), exactly like kissfft.
+//!   No explicit `1/N` is applied — the single-sided `2/N` forward scale plus
+//!   the double analysis/synthesis window reconstructs amplitude via COLA.
 //! * The window is applied **twice** (analysis + synthesis).
 //!
 //! ## Deviations from C++
@@ -120,9 +121,11 @@ impl SpectralEngine {
         }
     }
 
+    /// Reports `fft_size + hop_size`, matching the C++ plugins
+    /// (SpectralAudioPlugin reports `fftSize + hopSize`).
     #[inline]
     pub fn latency_samples(&self) -> usize {
-        self.fft_size
+        self.fft_size + self.hop_size
     }
 
     #[inline]
@@ -164,8 +167,12 @@ impl SpectralEngine {
         output: &mut [&mut [f32]],
         callback: &mut F,
     ) where
-        F: FnMut(usize, &mut [Polar]),
+        F: FnMut(usize, usize, usize, &mut [Polar]),
     {
+        // `callback(num_bins, channel_idx, overlap_idx, polar)` — the C++
+        // creates one spectral processor per (channel, overlap) instance, so
+        // the callback receives the instance identity for modules (like
+        // Phase Lock) that keep per-instance state.
         let fft_size = self.fft_size;
 
         for chan in 0..self.num_channels {
@@ -177,7 +184,7 @@ impl SpectralEngine {
             }
 
             // Each overlap instance processes the same input independently
-            for inst in self.instances[chan].iter_mut() {
+            for (overlap_idx, inst) in self.instances[chan].iter_mut().enumerate() {
                 // fill_in_passOut, one sample at a time (C++ lines 164-176):
                 // write input at the instance offset, read the matching
                 // output, fire the FFT the moment the buffer is exactly full.
@@ -190,8 +197,9 @@ impl SpectralEngine {
 
                     inst.offset += 1;
                     if inst.offset >= fft_size {
-                        process_instance(inst, &*self.fft_fwd, &*self.fft_inv,
-                            &self.window, fft_size, self.half_size, callback);
+                        process_instance(inst, chan, overlap_idx, &*self.fft_fwd,
+                            &*self.fft_inv, &self.window, fft_size, self.half_size,
+                            callback);
                         inst.offset = 0;
                     }
                 }
@@ -204,6 +212,8 @@ impl SpectralEngine {
 /// Matches StandardFFTProcessor::process when offset >= fftSize.
 fn process_instance<F>(
     inst: &mut StftInstance,
+    chan: usize,
+    overlap_idx: usize,
     fft_fwd: &dyn Fft<f32>,
     fft_inv: &dyn Fft<f32>,
     window: &[f32],
@@ -211,7 +221,7 @@ fn process_instance<F>(
     half_size: usize,
     callback: &mut F,
 ) where
-    F: FnMut(usize, &mut [Polar]),
+    F: FnMut(usize, usize, usize, &mut [Polar]),
 {
     // ① applyWindow (line 24)
     for i in 0..fft_size {
@@ -239,7 +249,7 @@ fn process_instance<F>(
     }
 
     // ⑥ User spectral callback
-    callback(half_size, &mut inst.polar_buf);
+    callback(half_size, chan, overlap_idx, &mut inst.polar_buf);
 
     // ⑦ pol2Car — first half from polar, mirror zeroed (lines 24-40)
     for i in 0..half_size {

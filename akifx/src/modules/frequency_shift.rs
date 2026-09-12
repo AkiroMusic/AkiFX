@@ -202,9 +202,13 @@ impl AkiFxModule for FrequencyShiftModule {
         let half_size = fft_size / 2;
 
         // Pre-compute shift parameters (matching recalculateInternalParameters)
+        // C++ truncates twice: setShift casts the Hz value to int, then
+        // recalculateInternalParameters casts shift*binWidth to int. The
+        // previous .round() landed on a different bin (up to one bin, about
+        // 21.5 Hz at 44.1 kHz / 2048) versus the original plugin.
         let bin_shift = if sample_rate > 0.0 {
             let bin_width = fft_size as f32 / sample_rate;
-            (shift_hz * bin_width).round() as i32
+            (shift_hz.trunc() * bin_width) as i32
         } else {
             0
         };
@@ -225,7 +229,7 @@ impl AkiFxModule for FrequencyShiftModule {
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |num_bins, polar| {
+            &mut |num_bins, _chan, _overlap, polar| {
                 frequency_shift_callback(
                     polar, num_bins, bin_shift, shift_start, shift_end, scale, scratch,
                 );
@@ -402,9 +406,15 @@ mod tests {
         // Output should track input delayed by latency.
         let latency = module.latency_samples() as usize;
 
-        // Find peak in output near where the input impulse should appear
-        let search_start = latency.saturating_sub(32);
-        let search_end = (latency + 32).min(total);
+        // Find peak in output near where the input impulse should appear.
+        // The double-Hann STFT spreads an impulse across overlapping frames,
+        // so search a window one hop wide around the reported latency.
+        let hop = module.fft_size / 4;
+        // True signal delay is fft_size (reported latency minus the
+        // conservative hop the C++ plugins add).
+        let true_delay = latency - hop;
+        let search_start = true_delay.saturating_sub(32);
+        let search_end = (true_delay + 32).min(total);
         let output_peak = output[search_start..search_end]
             .iter()
             .enumerate()
@@ -413,8 +423,8 @@ mod tests {
             .unwrap_or((0, 0.0));
 
         assert!(
-            (output_peak.0 as isize - latency as isize).unsigned_abs() < 32,
-            "impulse peak should be near latency ({latency}), found at {}",
+            (output_peak.0 as isize - true_delay as isize).unsigned_abs() < 32,
+            "impulse peak should be near the true delay ({true_delay}), found at {}",
             output_peak.0
         );
         assert!(
@@ -462,7 +472,7 @@ mod tests {
         let output_bin = dominant_bin(&output[skip..], fft_size);
 
         // Expected shift in bins: shift_hz * fft_size / sample_rate
-        let expected_bin_shift = (shift_hz * expected_bin_width).round() as usize;
+        let expected_bin_shift = (shift_hz.trunc() * expected_bin_width) as usize;
 
         assert!(
             output_bin >= input_bin,
@@ -646,10 +656,12 @@ mod tests {
     #[test]
     fn latency_equals_fft_size() {
         let module = make_module();
+        // fft_size + hop_size (hop = fft/4), matching the C++ plugins'
+        // reported latency.
         assert_eq!(
             module.latency_samples(),
-            DEFAULT_FFT_SIZE as u64,
-            "latency should equal FFT size"
+            (DEFAULT_FFT_SIZE + DEFAULT_FFT_SIZE / 4) as u64,
+            "latency should equal FFT size + hop size"
         );
     }
 

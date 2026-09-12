@@ -140,9 +140,7 @@ pub struct BinScramblerModule {
     cached_scatter: f32,
     /// Cached rate parameter for change detection.
     cached_rate: f32,
-    /// Scratch for the per-frame interpolated source indices (num_bins).
-    blended_indices: Vec<usize>,
-    /// Scratch for the in-place bin permutation in the spectral callback.
+    /// Scratch snapshot of the frame's bins for the crossfade callback.
     scratch_polar: Vec<Polar>,
     /// Dry signal buffer for left channel.
     dry_buf_l: Vec<f32>,
@@ -164,7 +162,6 @@ impl BinScramblerModule {
             current_ptr: 0,
             phasor: 0,
             phasor_max: 22050,
-            blended_indices: Vec::new(),
             scratch_polar: Vec::new(),
             cached_scramble: 0.0,
             cached_scatter: 0.0,
@@ -197,8 +194,7 @@ impl BinScramblerModule {
         self.indices_a = (0..num_bins as i32).collect();
         self.indices_b = self.indices_a.clone();
         self.current_ptr = 0;
-        if self.blended_indices.len() != num_bins {
-            self.blended_indices = vec![0; num_bins];
+        if self.scratch_polar.len() != num_bins {
             self.scratch_polar = vec![Polar::default(); num_bins];
         }
     }
@@ -330,23 +326,30 @@ impl AkiFxModule for BinScramblerModule {
             // Create RNG once before mutable borrows of indices
             let mut rng = self.make_rng();
 
-            // Apply scatter (low-to-high remapping)
+            // Apply scatter (the C++ `vector_Low2HighDistribute` "sprinkle"):
+            // for i in [0, size/5), destination (i + size)/5 and source
+            // (rand % size)/5 — so destinations land in
+            // [size/5, 6·size/25) and sources in [0, size/5). (The previous
+            // port wrote to destinations [0, size/5) — a different band of
+            // bins than the original plugin.)
             let (scatter_amount, scramble_factor) = self.compute_scatter_and_scramble();
             let indices = self.current_indices_mut();
-            let scatter_range = num_bins / 5;
-            if scatter_amount > 0 && scatter_range > 0 {
+            if scatter_amount > 0 && num_bins >= 5 {
                 for i in 0..num_bins / 5 {
                     if rng.gen_range(0..100) >= scatter_amount {
-                        let src = rng.gen_range(0..scatter_range);
-                        indices[i] = indices[src];
+                        let dest = (i + num_bins) / 5;
+                        let src = rng.gen_range(0..num_bins) / 5;
+                        indices[dest.min(num_bins - 1)] = indices[src];
                     }
                 }
             }
 
-            // Apply scramble (chunk shuffling)
+            // Apply scramble (chunk shuffling). The C++ loop condition is
+            // `n < size - scramAmount` (strict): the final partial region is
+            // deliberately left unshuffled.
             if scramble_factor > 0 {
                 let mut n = 0;
-                while n + scramble_factor <= indices.len() {
+                while n + scramble_factor < indices.len() {
                     indices[n..n + scramble_factor].shuffle(&mut rng);
                     n += scramble_factor;
                 }
@@ -362,36 +365,26 @@ impl AkiFxModule for BinScramblerModule {
         let phase = self.phasor;
         self.phasor += left.len() as u32;
 
-        // ── Precompute blended indices ─────────────────────────────────
+        // Crossfade weight: t = m_phase / m_maxPhase.
         let phasor_max = self.phasor_max;
-        let inv_phasor_max = if phasor_max > 0 {
-            1.0 / phasor_max as f32
+        let blend = if phasor_max > 0 {
+            phase as f32 / phasor_max as f32
         } else {
             1.0
         };
-        let blend = phase as f32 * inv_phasor_max;
-
-        let num_bins = self.fft_size / 2;
-        // Direct field access (rather than the previous/next helpers) so the
-        // borrow checker can see these don't alias `blended_indices`.
-        let (a, b) = if self.current_ptr == 0 {
-            (&self.indices_b, &self.indices_a)
-        } else {
-            (&self.indices_a, &self.indices_b)
-        };
-        for i in 0..num_bins {
-            let a_idx = a[i].max(0).min(num_bins as i32 - 1) as f32;
-            let b_idx = b[i].max(0).min(num_bins as i32 - 1) as f32;
-            let idx = a_idx + (b_idx - a_idx) * blend;
-            self.blended_indices[i] = idx as usize;
-        }
 
         // ── Spectral processing ────────────────────────────────────────
         self.ensure_dry_buffers(left.len());
         self.dry_buf_l[..left.len()].copy_from_slice(left);
         self.dry_buf_r[..right.len()].copy_from_slice(right);
 
-        let blended_indices: &[usize] = &self.blended_indices;
+        // Direct field access so the borrow checker sees the pattern buffers
+        // and the scratch do not alias the engine.
+        let (a, b) = if self.current_ptr == 0 {
+            (&self.indices_b, &self.indices_a)
+        } else {
+            (&self.indices_a, &self.indices_b)
+        };
         let scratch_polar: &mut [Polar] = &mut self.scratch_polar;
         let Some(engine) = self.engine.as_mut() else {
             return;
@@ -399,16 +392,25 @@ impl AkiFxModule for BinScramblerModule {
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |_num_bins, polar| {
+            &mut |_num_bins, _chan, _overlap, polar| {
                 // The engine invokes this callback once per channel instance
-                // with that channel's mono bin spectrum. (The previous
-                // implementation assumed an interleaved stereo buffer, so it
-                // scrambled half the bins using even/odd "channels" that do
-                // not exist.)
-                let bins = polar.len().min(blended_indices.len());
+                // with that channel's mono bin spectrum. The C++ crossfades
+                // bin VALUES between the two patterns,
+                //   out[i] = interp_lin(in[A[i]], in[B[i]], phase/maxPhase),
+                // i.e. the magnitude and phase of bins A[i] and B[i] are
+                // linearly blended. (Earlier ports blended the indices
+                // instead, which snapped between patterns instead of
+                // morphing continuously.)
+                let bins = polar.len().min(scratch_polar.len());
                 scratch_polar[..bins].copy_from_slice(&polar[..bins]);
-                for (i, slot) in polar[..bins].iter_mut().enumerate() {
-                    *slot = scratch_polar[blended_indices[i].min(bins - 1)];
+                let common = bins.min(a.len()).min(b.len());
+                for i in 0..common {
+                    let ia = (a[i].max(0) as usize).min(bins - 1);
+                    let ib = (b[i].max(0) as usize).min(bins - 1);
+                    polar[i].magnitude = scratch_polar[ia].magnitude
+                        + (scratch_polar[ib].magnitude - scratch_polar[ia].magnitude) * blend;
+                    polar[i].phase = scratch_polar[ia].phase
+                        + (scratch_polar[ib].phase - scratch_polar[ia].phase) * blend;
                 }
             },
         );

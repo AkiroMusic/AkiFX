@@ -349,7 +349,7 @@ impl AkiFxModule for SinusoidalShapedFilterModule {
         let index_scale = dsp_state.index_scale;
         let theta = dsp_state.theta;
         let exponent = dsp_state.sinusoid_exponent;
-        engine.process(input_channels, output_channels, &mut |num_bins, polar| {
+        engine.process(input_channels, output_channels, &mut |num_bins, _chan, _overlap, polar| {
             // Spectral callback: apply sinusoidal shaping per-bin
             // (inlined closure: engine/wavetable/dsp_state are disjoint borrows
             // from `self`, so a &mut self method cannot be used here).
@@ -574,6 +574,9 @@ mod tests {
         let output = process_signal(&mut module, &input);
 
         let latency = module.latency_samples() as usize;
+        // True signal delay is fft_size; the reported value adds a
+        // conservative hop (matching the C++ plugins).
+        let latency = latency - module.fft_size / 4;
 
         // The output peak should be near the expected latency
         // Allow ±(fft_size/2) tolerance due to windowing spread

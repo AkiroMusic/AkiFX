@@ -244,7 +244,7 @@ impl AkiFxModule for PlaygroundModule {
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |_num_bins, _polar| {
+            &mut |_num_bins, _chan, _overlap, _polar| {
                 // Identity: bins pass through unchanged.
             },
         );
@@ -324,6 +324,9 @@ mod tests {
         // After the engine fills (fft_size samples), output should track input.
         // Use cross-correlation to find the actual delay and gain.
         let latency = module.latency_samples() as usize;
+        // True signal delay is fft_size; the reported value adds a
+        // conservative hop (matching the C++ plugins).
+        let latency = latency - module.fft_size / 4;
         let compare_start = latency;
         let compare_end = total - fft_size;
         let compare_len = compare_end - compare_start;
@@ -599,8 +602,8 @@ mod tests {
         let module = make_module();
         assert_eq!(
             module.latency_samples(),
-            DEFAULT_FFT_SIZE as u64,
-            "latency should equal FFT size"
+            (DEFAULT_FFT_SIZE + DEFAULT_FFT_SIZE / 4) as u64,
+            "latency should equal FFT size + hop size"
         );
     }
 

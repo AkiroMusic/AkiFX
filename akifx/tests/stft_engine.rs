@@ -31,7 +31,7 @@ fn identity_reconstruction() {
     engine.process(
         &[&input],
         &mut [&mut output],
-        &mut |_num_bins, _polar| { /* identity */ },
+        &mut |_num_bins, _chan, _overlap, _polar| { /* identity */ },
     );
 
     // Compare output to input (output is delayed by latency_samples)
@@ -92,7 +92,7 @@ fn silence_remains_silent() {
         engine.process(
             &[&input, &input],
             &mut [&mut output0, &mut output1],
-            &mut |_bins, _pol| {},
+            &mut |_bins, _chan, _overlap, _pol| {},
         );
     }
 
@@ -145,7 +145,7 @@ fn sine_440hz_correlation() {
         engine.process(
             &[&input],
             &mut [&mut output],
-            &mut |_bins, _pol| {},
+            &mut |_bins, _chan, _overlap, _pol| {},
         );
 
         all_output.extend_from_slice(&output);
@@ -261,7 +261,7 @@ fn varying_block_sizes_no_panic() {
         engine.process(
             &[&input, &input],
             &mut [&mut out0, &mut out1],
-            &mut |num_bins, polar| {
+            &mut |num_bins, _chan, _overlap, polar| {
                 for bin in polar.iter_mut().take(num_bins) {
                     bin.phase *= 1.0;
                 }
@@ -304,7 +304,7 @@ fn non_hop_multiple_blocks_conserve_signal() {
         engine.process(
             &[&input, &input],
             &mut [&mut out0, &mut out1],
-            &mut |num_bins, polar| {
+            &mut |num_bins, _chan, _overlap, polar| {
                 let _ = num_bins;
                 let _ = polar;
                 // identity

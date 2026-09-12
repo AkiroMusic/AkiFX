@@ -269,17 +269,31 @@ impl PhaseLockParams {
 }
 impl Default for PhaseLockParams { fn default() -> Self { Self::new() } }
 
+/// Number of STFT overlap instances per channel (fixed, like the C++
+/// plugin's `SpectralAudioPlugin::FFT_OVERLAPS`).
+const OVERLAP_COUNT: usize = 4;
+
 pub struct PhaseLockModule {
     params: Arc<PhaseLockParams>, bypass: Arc<AtomicBool>,
     sample_rate: f32, engine: Option<SpectralEngine>, fft_size: usize,
-    dry_buf_l: Vec<f32>, dry_buf_r: Vec<f32>, phase_state: PhaseLockState,
+    dry_buf_l: Vec<f32>, dry_buf_r: Vec<f32>,
+    /// One independent state per (channel, overlap) instance. The C++
+    /// creates a separate PhaseLockFFTProcessor per instance, each with its
+    /// own locked/target vectors; sharing one state across all instances
+    /// (as an earlier port did) collapsed the stereo image onto whichever
+    /// instance froze its snapshot first.
+    phase_states: Vec<PhaseLockState>,
 }
 
 impl PhaseLockModule {
     pub fn new(params: Arc<PhaseLockParams>, bypass: Arc<AtomicBool>) -> Self {
-        Self { params, bypass, sample_rate: 44100.0, engine: None, fft_size: DEFAULT_FFT_SIZE,
-               dry_buf_l: Vec::new(), dry_buf_r: Vec::new(),
-               phase_state: PhaseLockState::new(44100.0, DEFAULT_FFT_SIZE) }
+        Self {
+            params, bypass, sample_rate: 44100.0, engine: None, fft_size: DEFAULT_FFT_SIZE,
+            dry_buf_l: Vec::new(), dry_buf_r: Vec::new(),
+            phase_states: (0..2 * OVERLAP_COUNT)
+                .map(|_| PhaseLockState::new(44100.0, DEFAULT_FFT_SIZE))
+                .collect(),
+        }
     }
     pub fn with_defaults() -> Self {
         let params = Arc::new(PhaseLockParams::new());
@@ -287,7 +301,11 @@ impl PhaseLockModule {
         Self::new(params, bypass)
     }
     fn build_engine(&mut self) {
-        let config = SpectralConfig { fft_size: self.fft_size, overlap_count: 4, window: WindowType::Hann };
+        let config = SpectralConfig {
+            fft_size: self.fft_size,
+            overlap_count: OVERLAP_COUNT,
+            window: WindowType::Hann,
+        };
         self.engine = Some(SpectralEngine::new(config, 2));
     }
     fn ensure_dry_buffers(&mut self, block_size: usize) {
@@ -304,13 +322,17 @@ impl AkiFxModule for PhaseLockModule {
     fn bypass_flag(&self) -> &Arc<AtomicBool> { &self.bypass }
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
-        self.phase_state = PhaseLockState::new(sample_rate, self.fft_size);
+        self.phase_states = (0..2 * OVERLAP_COUNT)
+            .map(|_| PhaseLockState::new(sample_rate, self.fft_size))
+            .collect();
         self.build_engine();
         self.ensure_dry_buffers(self.fft_size);
     }
     fn reset(&mut self) {
         if let Some(engine) = &mut self.engine { engine.reset(); }
-        self.phase_state.reset(self.sample_rate, self.fft_size);
+        for state in &mut self.phase_states {
+            state.reset(self.sample_rate, self.fft_size);
+        }
     }
     fn latency_samples(&self) -> u64 {
         self.engine.as_ref().map(|e| e.latency_samples() as u64).unwrap_or(0)
@@ -325,18 +347,22 @@ impl AkiFxModule for PhaseLockModule {
         let rand_phase = self.params.random_phase.value() / 100.0;
         let morph = self.params.morph_mag_and_phase.value();
         let morph_dur = self.params.morph_duration.value();
-        if phase_lock { self.phase_state.lock_phase_state.begin_transition_to_on(); }
-        else { self.phase_state.lock_phase_state.off(); }
-        if mag_lock { self.phase_state.lock_mag_state.begin_transition_to_on(); }
-        else { self.phase_state.lock_mag_state.off(); }
-        self.phase_state.transition_phase_state.set_duration(morph_dur);
-        self.phase_state.transition_mag_state.set_duration(morph_dur);
-        if morph {
-            self.phase_state.transition_phase_state.start();
-            self.phase_state.transition_mag_state.start();
-        } else {
-            self.phase_state.transition_phase_state.stop();
-            self.phase_state.transition_mag_state.stop();
+        // Drive the state machines on every instance (the C++ drives each
+        // processor's own state from the same parameter values).
+        for state in &mut self.phase_states {
+            if phase_lock { state.lock_phase_state.begin_transition_to_on(); }
+            else { state.lock_phase_state.off(); }
+            if mag_lock { state.lock_mag_state.begin_transition_to_on(); }
+            else { state.lock_mag_state.off(); }
+            state.transition_phase_state.set_duration(morph_dur);
+            state.transition_mag_state.set_duration(morph_dur);
+            if morph {
+                state.transition_phase_state.start();
+                state.transition_mag_state.start();
+            } else {
+                state.transition_phase_state.stop();
+                state.transition_mag_state.stop();
+            }
         }
         self.ensure_dry_buffers(left.len());
         self.dry_buf_l[..left.len()].copy_from_slice(left);
@@ -346,15 +372,18 @@ impl AkiFxModule for PhaseLockModule {
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
-        let state = &mut self.phase_state;
+        let states = &mut self.phase_states;
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |num_bins, polar| {
+            &mut |num_bins, chan, overlap, polar| {
                 let params = PhaseLockProcessParams {
                     phase_mix, mag_mix, mag_track, random_phase_mix: rand_phase,
                 };
-                state.spectral_process(num_bins, polar, &params);
+                let idx = chan * OVERLAP_COUNT + overlap;
+                if let Some(state) = states.get_mut(idx) {
+                    state.spectral_process(num_bins, polar, &params);
+                }
             },
         );
     }
@@ -416,6 +445,9 @@ mod tests {
         }).collect();
         let output = process_signal(&mut module, &input);
         let latency = module.latency_samples() as usize;
+        // True signal delay is fft_size; the reported value adds a
+        // conservative hop (matching the C++ plugins).
+        let latency = latency - module.fft_size / 4;
         let compare_end = total - fft_size;
         let compare_len = compare_end - latency;
         let mut corr = 0.0f32;

@@ -253,7 +253,7 @@ impl AkiFxModule for FrequencyMagnetModule {
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |num_bins, polar| {
+            &mut |num_bins, _chan, _overlap, polar| {
                 spectral_process_magnet(
                     polar,
                     num_bins,
@@ -339,10 +339,14 @@ fn spectral_process_magnet(
     // ── Below target bin ────────────────────────────────────────────────
     for i in 0..target_bin {
         let line = i as f32 / target_bin as f32;
-        // width * 8 / 8 = width (faithful to C++ expression)
-        let index_below = (line.powf(biased_width) * target_bin as f32) as usize;
+        // width * 8 / 8 = width (faithful to C++ expression). The C++ keeps
+        // the mapped index FRACTIONAL: utilities::interp_lin truncates the
+        // index and blends temp[idx] with temp[idx + 1] by the remainder.
+        // (The previous Rust code truncated before computing the blend
+        // weight, so the fractional smear was dead.)
+        let index_below = line.powf(biased_width) * target_bin as f32;
 
-        let idx = index_below.min(fft_size - 1);
+        let idx = (index_below as usize).min(fft_size - 1);
         temp[idx] += in_mag[i];
 
         // Phase at input index (faithful to C++: out[i].m_phase = in[i].m_phase)
@@ -350,15 +354,12 @@ fn spectral_process_magnet(
             polar[i].phase = in_phase[i];
         }
 
-        // Magnitude at remapped index with sub-bin interpolation
-        let next = (idx + 1).min(fft_size - 1);
-        let interp = if idx < fft_size - 1 {
-            let t = index_below as f32 - idx as f32;
-            temp[idx] * (1.0 - t) + temp[next] * t
-        } else {
-            temp[idx]
-        };
-        polar[idx].magnitude = interp;
+        // out[idx].m_mag = interp_lin(temp[idx], temp[idx + 1], index_below).
+        // C++ reads temp[idx + 1] one past the end when idx == bins - 1
+        // (undefined behaviour); we clamp to the last valid slot instead.
+        let next = (idx + 1).min(num_bins - 1);
+        let t = index_below.fract();
+        polar[idx].magnitude = temp[idx] + (temp[next] - temp[idx]) * t;
     }
 
     // ── Above target bin ────────────────────────────────────────────────
@@ -379,22 +380,19 @@ fn spectral_process_magnet(
 
         index_above = index_above.clamp(1.0, (num_bins as f32) - 1.0);
 
-        let idx = index_above as usize;
-        let idx = idx.min(num_bins - 1);
+        let idx = (index_above as usize).min(num_bins - 1);
         temp[idx] += in_mag[i];
 
         // Phase at input index (faithful to C++: out[i].m_phase = in[i].m_phase)
         polar[i].phase = in_phase[i];
 
-        // Magnitude at remapped index with sub-bin interpolation
+        // out[idx].m_mag = interp_lin(temp[idx], temp[idx - 1], index_above):
+        // the C++ blends toward the PREVIOUS bin by the fractional part.
+        // (The previous Rust code used t = frac + 1, turning the blend into
+        // an extrapolation that overshot and inverted the neighbour.)
         let prev = idx.saturating_sub(1);
-        let interp = if idx > 0 {
-            let t = index_above - prev as f32;
-            temp[prev] * (1.0 - t) + temp[idx] * t
-        } else {
-            temp[idx]
-        };
-        polar[idx].magnitude = interp;
+        let t = index_above.fract();
+        polar[idx].magnitude = temp[idx] + (temp[prev] - temp[idx]) * t;
     }
 }
 
@@ -496,6 +494,9 @@ mod tests {
         let output = process_signal(&mut module, &input);
 
         let latency = module.latency_samples() as usize;
+        // True signal delay is fft_size; the reported value adds a
+        // conservative hop (matching the C++ plugins).
+        let latency = latency - module.fft_size / 4;
 
         // The output should contain a peak near the expected latency position
         let search_start = latency.saturating_sub(32);

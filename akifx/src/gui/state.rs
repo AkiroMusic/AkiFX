@@ -189,10 +189,12 @@ mod tests {
                 entry.name
             );
         }
-        // Sanity: with all engines built, the spectral modules report their
-        // engine latency (2048), while Puberty Simulator defaults to a
-        // smaller 1024-sample window.
-        assert_eq!(entries[6].latency_samples, 2048, "Spectral Gate");
+        // Sanity: with all engines built, the SpectralSuite-derived modules
+        // report fft_size + hop_size = 2048 + 512 (matching the C++
+        // plugins), while Puberty Simulator defaults to a smaller
+        // 1024-sample window and Spectral Compressor reports its 2048
+        // window.
+        assert_eq!(entries[6].latency_samples, 2560, "Spectral Gate");
         assert_eq!(entries[13].latency_samples, 1024, "Puberty Simulator");
         assert_eq!(entries[17].latency_samples, 2048, "Spectral Compressor");
         assert_eq!(entries[19].latency_samples, 0, "Gain");

@@ -274,7 +274,7 @@ impl AkiFxModule for SpectralGateModule {
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |num_bins, polar| {
+            &mut |num_bins, _chan, _overlap, polar| {
                 // Faithful port of SpectralGateFFTProcessor::spectral_process
                 // DC bin (0) passes through unchanged
 
@@ -452,6 +452,9 @@ mod tests {
 
         // Output should have a peak at the expected delay position
         let latency = module.latency_samples() as usize;
+        // True signal delay is fft_size; the reported value adds a
+        // conservative hop (matching the C++ plugins).
+        let latency = latency - module.fft_size / 4;
         let peak_pos = output[latency..]
             .iter()
             .enumerate()
@@ -643,8 +646,8 @@ mod tests {
         let module = make_module();
         assert_eq!(
             module.latency_samples(),
-            DEFAULT_FFT_SIZE as u64,
-            "latency should equal FFT size"
+            (DEFAULT_FFT_SIZE + DEFAULT_FFT_SIZE / 4) as u64,
+            "latency should equal FFT size + hop size"
         );
     }
 

@@ -386,7 +386,7 @@ impl AkiFxModule for MorphModule {
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
-            &mut |num_bins, polar| {
+            &mut |num_bins, _chan, _overlap, polar| {
                 let bin_count = num_bins.min(polar.len());
 
                 // Build a temporary copy of the input bins in the reused
@@ -569,6 +569,9 @@ mod tests {
 
         // The output should have a peak near the impulse position (delayed by latency)
         let latency = module.latency_samples() as usize;
+        // True signal delay is fft_size; the reported value adds a
+        // conservative hop (matching the C++ plugins).
+        let latency = latency - module.fft_size / 4;
 
         // Find the peak in the output
         let peak_pos = output
@@ -788,8 +791,8 @@ mod tests {
         let module = make_module();
         assert_eq!(
             module.latency_samples(),
-            DEFAULT_FFT_SIZE as u64,
-            "latency should equal FFT size"
+            (DEFAULT_FFT_SIZE + DEFAULT_FFT_SIZE / 4) as u64,
+            "latency should equal FFT size + hop size"
         );
     }
 
