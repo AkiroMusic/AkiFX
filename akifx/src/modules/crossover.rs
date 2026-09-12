@@ -547,17 +547,6 @@ impl CrossoverModule {
         ]
     }
 
-    /// Get the current band gains as an array.
-    fn band_gains(&self) -> [f32; MAX_BANDS] {
-        [
-            self.params.band_1_gain.value(),
-            self.params.band_2_gain.value(),
-            self.params.band_3_gain.value(),
-            self.params.band_4_gain.value(),
-            self.params.band_5_gain.value(),
-        ]
-    }
-
     /// Update filter coefficients from current parameter values.
     fn update_filters(&mut self) {
         let num_bands = self.params.num_bands.value() as usize;
