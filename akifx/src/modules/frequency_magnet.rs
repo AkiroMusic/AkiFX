@@ -215,8 +215,12 @@ impl AkiFxModule for FrequencyMagnetModule {
         let width_bias_raw = self.params.width_bias.value();
         let use_legacy = self.params.use_legacy.value();
 
-        // Process through spectral engine with frequency magnet callback
-        let engine = self.engine.as_mut().expect("engine must be initialized");
+        // Process through spectral engine with frequency magnet callback.
+        // Engine construction is guaranteed during initialize(); skip this
+        // block rather than panicking in the host's audio callback if not.
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
         let fft_size = self.fft_size;
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],

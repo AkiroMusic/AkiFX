@@ -152,6 +152,12 @@ impl SpectralEngine {
     /// Each channel's output is the sum of all overlap instances' outputs,
     /// matching the C++ SpectralAudioProcessorInteractor::process loop.
     /// The callback is invoked once per FFT frame per instance.
+    ///
+    /// Unlike the C++ (which steps in `hop_size` chunks), samples are
+    /// advanced one at a time so instance offsets hit `fft_size` exactly.
+    /// The chunked version silently dropped input/output samples whenever a
+    /// host delivered blocks that are not multiples of the hop size (e.g.
+    /// 480-sample blocks with a 512-sample hop), causing periodic dropouts.
     pub fn process<F>(
         &mut self,
         input: &[&[f32]],
@@ -161,7 +167,6 @@ impl SpectralEngine {
         F: FnMut(usize, &mut [Polar]),
     {
         let fft_size = self.fft_size;
-        let hop_size = self.hop_size;
 
         for chan in 0..self.num_channels {
             let block_size = input[chan].len();
@@ -173,32 +178,22 @@ impl SpectralEngine {
 
             // Each overlap instance processes the same input independently
             for inst in self.instances[chan].iter_mut() {
-                // Process in hop_size chunks (matching C++ blockSize = m_fftHopSize)
-                let mut pos = 0;
-                while pos < block_size {
-                    let chunk = (block_size - pos).min(hop_size);
-                    let inp = &input[chan][pos..pos + chunk];
-                    let out = &mut output[chan][pos..pos + chunk];
-
-                    // fill_in_passOut: write input, read output (C++ lines 164-176)
-                    for i in 0..chunk {
-                        let off = inst.offset + i;
-                        if off < fft_size {
-                            inst.input_buf[off] = inp[i];
-                            out[i] += inst.output_buf[off];
-                        }
+                // fill_in_passOut, one sample at a time (C++ lines 164-176):
+                // write input at the instance offset, read the matching
+                // output, fire the FFT the moment the buffer is exactly full.
+                for i in 0..block_size {
+                    let off = inst.offset;
+                    if off < fft_size {
+                        inst.input_buf[off] = input[chan][i];
+                        output[chan][i] += inst.output_buf[off];
                     }
 
-                    inst.offset += chunk;
-
-                    // When offset reaches fft_size, trigger FFT (C++ line 23)
+                    inst.offset += 1;
                     if inst.offset >= fft_size {
                         process_instance(inst, &*self.fft_fwd, &*self.fft_inv,
                             &self.window, fft_size, self.half_size, callback);
                         inst.offset = 0;
                     }
-
-                    pos += hop_size;
                 }
             }
         }
@@ -269,6 +264,3 @@ fn process_instance<F>(
         inst.output_buf[i] *= window[i];
     }
 }
-
-unsafe impl Send for SpectralEngine {}
-unsafe impl Sync for SpectralEngine {}

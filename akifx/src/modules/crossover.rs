@@ -84,14 +84,23 @@ impl BiquadCoefficients {
         }
     }
 
+    /// Clamp inputs into a range where the RBJ coefficient formulas are
+    /// well-defined. The crossover-frequency parameters top out at 20 kHz,
+    /// so hosts running at or below 40 kHz can push automated values past
+    /// Nyquist; clamping keeps the audio thread panic-free (the previous
+    /// `assert!`s were reachable in release builds).
+    fn sanitize(sample_rate: f32, frequency: f32, q: f32) -> (f32, f32, f32) {
+        let sample_rate = sample_rate.max(1.0);
+        let frequency = frequency.clamp(1.0, sample_rate * 0.45);
+        let q = q.max(1.0e-4);
+        (sample_rate, frequency, q)
+    }
+
     /// Compute coefficients for a 2nd-order low-pass filter.
     ///
     /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
     fn lowpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        assert!(sample_rate > 0.0);
-        assert!(frequency > 0.0);
-        assert!(frequency < sample_rate / 2.0);
-        assert!(q > 0.0);
+        let (sample_rate, frequency, q) = Self::sanitize(sample_rate, frequency, q);
 
         let omega0 = consts::TAU * (frequency / sample_rate);
         let cos_omega0 = omega0.cos();
@@ -111,10 +120,7 @@ impl BiquadCoefficients {
     ///
     /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
     fn highpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        assert!(sample_rate > 0.0);
-        assert!(frequency > 0.0);
-        assert!(frequency < sample_rate / 2.0);
-        assert!(q > 0.0);
+        let (sample_rate, frequency, q) = Self::sanitize(sample_rate, frequency, q);
 
         let omega0 = consts::TAU * (frequency / sample_rate);
         let cos_omega0 = omega0.cos();
@@ -134,10 +140,7 @@ impl BiquadCoefficients {
     ///
     /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
     fn allpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        assert!(sample_rate > 0.0);
-        assert!(frequency > 0.0);
-        assert!(frequency < sample_rate / 2.0);
-        assert!(q > 0.0);
+        let (sample_rate, frequency, q) = Self::sanitize(sample_rate, frequency, q);
 
         let omega0 = consts::TAU * (frequency / sample_rate);
         let cos_omega0 = omega0.cos();

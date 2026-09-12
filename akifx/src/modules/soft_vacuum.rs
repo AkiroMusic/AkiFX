@@ -304,8 +304,11 @@ impl Lanczos3Oversampler {
 const MAX_OVERSAMPLING_FACTOR: usize = 4; // 16×
 const MAX_OVERSAMPLING_TIMES: usize = 1 << MAX_OVERSAMPLING_FACTOR;
 const DEFAULT_OVERSAMPLING_FACTOR: usize = 1; // 2×
-const MAX_BLOCK_SIZE: usize = 512;
-const MAX_OVERSAMPLED_BLOCK: usize = MAX_BLOCK_SIZE * MAX_OVERSAMPLING_TIMES;
+/// Fallback block-size bound used before the host calls `initialize()`. The
+/// real bound is the host's `max_block_size`; sizing the oversampler scratch
+/// from a hard-coded value instead makes hosts with larger blocks overflow
+/// those buffers (a debug_assert in dev, memory corruption in release).
+const DEFAULT_MAX_BLOCK_SIZE: usize = 512;
 
 /// Parameters mirroring the source Soft Vacuum plugin.
 #[derive(Params)]
@@ -402,13 +405,14 @@ struct ScratchBuffers {
 }
 
 impl ScratchBuffers {
-    fn new() -> Self {
+    fn new(max_block_size: usize) -> Self {
+        let upsampled_len = max_block_size * MAX_OVERSAMPLING_TIMES;
         Self {
-            drive: vec![0.0; MAX_OVERSAMPLED_BLOCK],
-            warmth: vec![0.0; MAX_OVERSAMPLED_BLOCK],
-            aura: vec![0.0; MAX_OVERSAMPLED_BLOCK],
-            output_gain: vec![0.0; MAX_OVERSAMPLED_BLOCK],
-            dry_wet_ratio: vec![0.0; MAX_OVERSAMPLED_BLOCK],
+            drive: vec![0.0; upsampled_len],
+            warmth: vec![0.0; upsampled_len],
+            aura: vec![0.0; upsampled_len],
+            output_gain: vec![0.0; upsampled_len],
+            dry_wet_ratio: vec![0.0; upsampled_len],
         }
     }
 }
@@ -423,11 +427,11 @@ struct ChannelState {
 }
 
 impl ChannelState {
-    fn new() -> Self {
+    fn new(max_block_size: usize) -> Self {
         Self {
             hard_vacuum: HardVacuum::default(),
-            oversampler: Lanczos3Oversampler::new(MAX_BLOCK_SIZE, MAX_OVERSAMPLING_FACTOR),
-            slew_oversampler: Lanczos3Oversampler::new(MAX_BLOCK_SIZE, MAX_OVERSAMPLING_FACTOR),
+            oversampler: Lanczos3Oversampler::new(max_block_size, MAX_OVERSAMPLING_FACTOR),
+            slew_oversampler: Lanczos3Oversampler::new(max_block_size, MAX_OVERSAMPLING_FACTOR),
         }
     }
 
@@ -442,8 +446,16 @@ pub struct SoftVacuumModule {
     params: Arc<SoftVacuumParams>,
     bypass: Arc<AtomicBool>,
     sample_rate: f32,
+    /// Largest block the oversamplers and param scratch buffers are sized
+    /// for. Grows if the host ever delivers more than `initialize()` was
+    /// told about.
+    max_block_size: usize,
     channels: Vec<ChannelState>,
     scratch: Box<ScratchBuffers>,
+    /// Per-block slew work buffers (module-owned so processing doesn't
+    /// allocate on the audio thread).
+    slew_buf: Vec<f32>,
+    upslew_buf: Vec<f32>,
 }
 
 impl SoftVacuumModule {
@@ -452,8 +464,11 @@ impl SoftVacuumModule {
             params,
             bypass,
             sample_rate: 44100.0,
+            max_block_size: DEFAULT_MAX_BLOCK_SIZE,
             channels: Vec::new(),
-            scratch: Box::new(ScratchBuffers::new()),
+            scratch: Box::new(ScratchBuffers::new(DEFAULT_MAX_BLOCK_SIZE)),
+            slew_buf: Vec::new(),
+            upslew_buf: Vec::new(),
         }
     }
 
@@ -462,6 +477,23 @@ impl SoftVacuumModule {
             Arc::new(SoftVacuumParams::default()),
             Arc::new(AtomicBool::new(false)),
         )
+    }
+
+    /// Grow the oversampler and scratch allocations if the host delivers
+    /// blocks larger than what we were initialized with. Recreating the
+    /// oversamplers resets their filter state, but this only runs on a host
+    /// contract violation where the alternative is a panic in the audio
+    /// callback.
+    fn ensure_block_capacity(&mut self, block_len: usize) {
+        if block_len <= self.max_block_size {
+            return;
+        }
+        self.max_block_size = block_len;
+        for ch in &mut self.channels {
+            ch.oversampler = Lanczos3Oversampler::new(block_len, MAX_OVERSAMPLING_FACTOR);
+            ch.slew_oversampler = Lanczos3Oversampler::new(block_len, MAX_OVERSAMPLING_FACTOR);
+        }
+        self.scratch = Box::new(ScratchBuffers::new(block_len));
     }
 }
 
@@ -478,12 +510,13 @@ impl AkiFxModule for SoftVacuumModule {
         &self.bypass
     }
 
-    fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
+    fn initialize(&mut self, sample_rate: f32, max_block_size: usize) {
         self.sample_rate = sample_rate;
         // Ensure we have at least 2 channels (stereo)
         while self.channels.len() < 2 {
-            self.channels.push(ChannelState::new());
+            self.channels.push(ChannelState::new(max_block_size));
         }
+        self.ensure_block_capacity(max_block_size);
     }
 
     fn reset(&mut self) {
@@ -506,6 +539,8 @@ impl AkiFxModule for SoftVacuumModule {
         let block_len = left.len().max(right.len());
         let upsampled_len = block_len * os_times;
 
+        self.ensure_block_capacity(block_len);
+
         // Process a single channel slice with its own ChannelState
         fn process_channel(
             ch: &mut ChannelState,
@@ -514,6 +549,8 @@ impl AkiFxModule for SoftVacuumModule {
             upsampled_len: usize,
             params: &SoftVacuumParams,
             scratch: &mut ScratchBuffers,
+            slew_buf: &mut Vec<f32>,
+            upslew_buf: &mut Vec<f32>,
         ) {
             let block_len = block.len();
 
@@ -539,17 +576,25 @@ impl AkiFxModule for SoftVacuumModule {
                 .smoothed
                 .next_block(&mut scratch.dry_wet_ratio, upsampled_len);
 
-            // Compute slews at base rate, then upsample the slew signal
-            let mut slews = vec![0.0f32; block_len];
+            // Compute slews at base rate, then upsample the slew signal.
+            // The buffers are module-owned so repeated blocks don't allocate.
+            slew_buf.clear();
+            slew_buf.resize(block_len, 0.0);
             for (i, &s) in block.iter().enumerate() {
-                slews[i] = ch.hard_vacuum.compute_slew(s);
+                slew_buf[i] = ch.hard_vacuum.compute_slew(s);
             }
 
             // When os_factor is 0 (1x), use slews directly; otherwise upsample
-            let upsampled_slews = if os_factor == 0 {
-                slews
+            // into the slew oversampler's scratch and copy out so the audio
+            // oversampler can borrow the channel again below.
+            let upsampled_slews: &[f32] = if os_factor == 0 {
+                slew_buf
             } else {
-                ch.slew_oversampler.upsample(&mut slews, os_factor).to_vec()
+                let upsampled = ch.slew_oversampler.upsample(slew_buf, os_factor);
+                upslew_buf.clear();
+                upslew_buf.resize(upsampled.len(), 0.0);
+                upslew_buf.copy_from_slice(upsampled);
+                upslew_buf
             };
 
             // Oversample the audio, apply distortion, downsample
@@ -572,9 +617,10 @@ impl AkiFxModule for SoftVacuumModule {
             });
         }
 
-        // Ensure we have at least 2 channels
+        // Ensure we have at least 2 channels (normally done in initialize())
         while self.channels.len() < 2 {
-            self.channels.push(ChannelState::new());
+            let mbs = self.max_block_size;
+            self.channels.push(ChannelState::new(mbs));
         }
 
         // Process left channel with channels[0]
@@ -585,6 +631,8 @@ impl AkiFxModule for SoftVacuumModule {
             upsampled_len,
             &self.params,
             &mut self.scratch,
+            &mut self.slew_buf,
+            &mut self.upslew_buf,
         );
 
         // Process right channel with channels[1]
@@ -595,6 +643,8 @@ impl AkiFxModule for SoftVacuumModule {
             upsampled_len,
             &self.params,
             &mut self.scratch,
+            &mut self.slew_buf,
+            &mut self.upslew_buf,
         );
     }
 }

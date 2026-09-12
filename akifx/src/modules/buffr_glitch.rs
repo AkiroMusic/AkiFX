@@ -87,6 +87,20 @@ impl RingBuffer {
         }
     }
 
+    /// Whether `resize()` has run and the buffers are safe to play back.
+    fn is_allocated(&self) -> bool {
+        !self.audio_buffers.is_empty() && !self.audio_buffers[0].is_empty()
+    }
+
+    /// Clear playback state without deallocating the storage. Deallocating
+    /// here would leave the voice unusable after a host reset (the next
+    /// note-on would index an empty buffer and panic on the audio thread).
+    fn reset_state(&mut self) {
+        self.next_sample_pos = 0;
+        self.crossfade_length = 0;
+        self.status = BufferStatus::Recording;
+    }
+
     /// Prepare for playback at the given frequency. Sets the active buffer
     /// length to one period and resets the write position for recording.
     fn prepare_playback(&mut self, frequency: f32, crossfade_ms: f32) {
@@ -233,12 +247,17 @@ impl Default for Voice {
 
 impl Voice {
     fn reset(&mut self) {
-        self.buffer = RingBuffer::default();
+        self.buffer.reset_state();
         self.midi_note_id = None;
         self.amp_envelope.reset();
     }
 
     fn note_on(&mut self, params: &BuffrGlitchParams, note: u8, velocity: f32) {
+        if !self.buffer.is_allocated() {
+            // No storage yet (host reset before initialize()): ignore the
+            // note instead of indexing an unallocated buffer.
+            return;
+        }
         self.midi_note_id = Some(note);
         self.velocity_gain = if params.velocity_sensitive.value() {
             velocity / (100.0 / 127.0)
@@ -469,6 +488,18 @@ impl AkiFxModule for BuffrGlitchModule {
         let attack_ms = self.params.attack_ms.value();
         let release_ms = self.params.release_ms.value();
 
+        // The envelope coefficients only depend on block-level values, so set
+        // them once per block instead of once per sample per voice (exp() is
+        // not free, and voices can be up to MAX_POLYPHON).
+        for voice in &mut self.voices {
+            voice
+                .amp_envelope
+                .set_attack_time(self.sample_rate, attack_ms);
+            voice
+                .amp_envelope
+                .set_release_time(self.sample_rate, release_ms);
+        }
+
         for sample_idx in 0..num_samples {
             // --- Process any events at this sample offset ---
             while event_idx < note_events.len() {
@@ -509,12 +540,6 @@ impl AkiFxModule for BuffrGlitchModule {
                 if !voice.is_active() {
                     continue;
                 }
-                voice
-                    .amp_envelope
-                    .set_attack_time(self.sample_rate, attack_ms);
-                voice
-                    .amp_envelope
-                    .set_release_time(self.sample_rate, release_ms);
                 let env = voice.amp_envelope.next_sample();
                 let amp = voice.velocity_gain * env;
                 max_envelope = max_envelope.max(env);

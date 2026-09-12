@@ -326,7 +326,11 @@ impl AkiFxModule for PhaseLockModule {
         self.ensure_dry_buffers(left.len());
         self.dry_buf_l[..left.len()].copy_from_slice(left);
         self.dry_buf_r[..right.len()].copy_from_slice(right);
-        let engine = self.engine.as_mut().expect("engine must be initialized");
+        // Engine construction is guaranteed during initialize(); skip this
+        // block rather than panicking in the host's audio callback if not.
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
         let state = &mut self.phase_state;
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],

@@ -50,18 +50,30 @@ impl DryWetMixer {
         self.next_write_position = 0;
     }
 
+    /// Grow the delay line so a block of `block_size` samples with `latency`
+    /// latency compensation fits. Only runs when a host delivers blocks
+    /// larger than the most recent `resize()` accounted for, so the
+    /// reallocation is effectively never on the hot path. Panicking instead
+    /// (as this used to) takes the whole DAW down.
+    fn ensure_capacity(&mut self, block_size: usize, latency: usize) {
+        let needed = (block_size + latency).next_power_of_two();
+        let current = self.delay_line.first().map_or(0, |buf| buf.len());
+        if needed <= current {
+            return;
+        }
+        for buf in &mut self.delay_line {
+            buf.resize(needed, 0.0);
+        }
+    }
+
     /// Write the dry signal into the delay line. Call at the start of process().
-    ///
-    /// # Panics
-    ///
-    /// Panics if the buffer is larger than the delay line capacity.
     pub fn write_dry(&mut self, left: &[f32], right: &[f32]) {
         if self.delay_line.is_empty() {
             return;
         }
+        self.ensure_capacity(left.len(), 0);
         let delay_len = self.delay_line[0].len();
         let block_size = left.len();
-        assert!(block_size <= delay_len);
 
         let num_before_wrap = block_size.min(delay_len - self.next_write_position);
         let num_after_wrap = block_size - num_before_wrap;
@@ -87,10 +99,6 @@ impl DryWetMixer {
     ///
     /// - `ratio`: 0.0 = all dry, 1.0 = all wet.
     /// - `latency`: number of samples of delay to compensate for.
-    ///
-    /// # Panics
-    ///
-    /// Panics if block_size + latency exceeds delay line capacity.
     pub fn mix_in_dry(
         &mut self,
         left: &mut [f32],
@@ -112,9 +120,9 @@ impl DryWetMixer {
             MixingStyle::EqualPower => (ratio.sqrt(), (1.0 - ratio).sqrt()),
         };
 
+        self.ensure_capacity(left.len(), latency);
         let delay_len = self.delay_line[0].len();
         let block_size = left.len();
-        assert!(block_size + latency <= delay_len);
 
         let read_pos =
             (self.next_write_position + delay_len - block_size - latency) % delay_len;

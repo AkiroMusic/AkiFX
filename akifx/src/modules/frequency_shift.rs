@@ -207,8 +207,12 @@ impl AkiFxModule for FrequencyShiftModule {
             ((-bin_shift).max(0) as usize, half_size)
         };
 
-        // Process through spectral engine
-        let engine = self.engine.as_mut().expect("engine must be initialized");
+        // Process through spectral engine.
+        // Engine construction is guaranteed during initialize(); skip this
+        // block rather than panicking in the host's audio callback if not.
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],

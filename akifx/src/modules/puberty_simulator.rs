@@ -318,7 +318,12 @@ impl PubertySimulatorModule {
         gain_compensation: f32,
     ) {
         let plan_idx = window_size.trailing_zeros() as usize - MIN_WINDOW_ORDER;
-        let plan = &self.plans.as_ref().unwrap()[plan_idx];
+        // Plans are normally built by `ensure_plans()`; skip the frame
+        // instead of panicking in the host's audio callback if they are
+        // somehow missing.
+        let Some(plan) = self.plans.as_ref().map(|p| &p[plan_idx]) else {
+            return;
+        };
         let chan = &mut self.channels[chan_idx];
 
         // Extract frame: N most recent input samples from the INPUT ring buffer.
@@ -332,10 +337,15 @@ impl PubertySimulatorModule {
             chan.frame[j] *= self.window[j];
         }
 
-        // Forward real FFT.
-        plan.r2c
+        // Forward real FFT. FFT errors indicate a buffer-size contract
+        // violation; skip the frame rather than panicking on the audio thread.
+        if plan
+            .r2c
             .process_with_scratch(&mut chan.frame, &mut chan.complex_buf, &mut [])
-            .expect("r2c process failed");
+            .is_err()
+        {
+            return;
+        }
 
         // Pitch shift in frequency domain.
         let num_bins = chan.complex_buf.len(); // window_size / 2 + 1
@@ -405,9 +415,13 @@ impl PubertySimulatorModule {
 
         // Inverse real FFT — realfft's IFFT is unscaled; the 1/N compensation
         // is already included in the per-bin gain.
-        plan.c2r
+        if plan
+            .c2r
             .process_with_scratch(&mut chan.complex_buf, &mut chan.frame, &mut [])
-            .expect("c2r process failed");
+            .is_err()
+        {
+            return;
+        }
 
         // Apply synthesis window.
         for j in 0..window_size {

@@ -353,6 +353,9 @@ pub struct SpectralCompressorModule {
     params: Arc<SpectralCompressorParams>,
     bypass: Arc<AtomicBool>,
     sample_rate: f32,
+    /// Largest block the dry/wet mixer is sized for, from the host's
+    /// `initialize()` argument. Grows if the host ever delivers more.
+    max_block_size: usize,
 
     /// Pre-computed FFT plans for each window order.
     plans: Option<[FftPlan; NUM_PLANS]>,
@@ -379,6 +382,7 @@ impl SpectralCompressorModule {
             params,
             bypass,
             sample_rate: 44100.0,
+            max_block_size: 0,
             plans: None,
             window: Vec::new(),
             cached_window_size: 0,
@@ -398,6 +402,7 @@ impl SpectralCompressorModule {
             params,
             bypass,
             sample_rate: 44100.0,
+            max_block_size: 0,
             plans: None,
             window: Vec::new(),
             cached_window_size: 0,
@@ -465,7 +470,12 @@ impl SpectralCompressorModule {
         output_gain: f32,
     ) {
         let plan_idx = window_size.trailing_zeros() as usize - MIN_WINDOW_ORDER;
-        let plan = &self.plans.as_ref().unwrap()[plan_idx];
+        // Plans are normally built by `ensure_plans()`; skip the frame
+        // instead of panicking in the host's audio callback if they are
+        // somehow missing.
+        let Some(plan) = self.plans.as_ref().map(|p| &p[plan_idx]) else {
+            return;
+        };
         let chan = &mut self.channels[chan_idx];
 
         // Extract frame from input ring buffer
@@ -482,10 +492,15 @@ impl SpectralCompressorModule {
             *sample *= *window_sample * input_gain;
         }
 
-        // Forward FFT
-        plan.r2c
+        // Forward FFT. FFT errors indicate a buffer-size contract violation;
+        // skip the frame rather than panicking on the audio thread.
+        if plan
+            .r2c
             .process_with_scratch(&mut chan.frame, &mut chan.complex_buf, &mut [])
-            .expect("r2c process failed");
+            .is_err()
+        {
+            return;
+        }
 
         // Per-bin compression
         self.compressor_bank.process(
@@ -497,9 +512,13 @@ impl SpectralCompressorModule {
         );
 
         // Inverse FFT
-        plan.c2r
+        if plan
+            .c2r
             .process_with_scratch(&mut chan.complex_buf, &mut chan.frame, &mut [])
-            .expect("c2r process failed");
+            .is_err()
+        {
+            return;
+        }
 
         // Apply synthesis window + output gain
         let out_gain = output_gain * gain_compensation.sqrt();
@@ -529,11 +548,12 @@ impl AkiFxModule for SpectralCompressorModule {
 
     fn initialize(&mut self, sample_rate: f32, max_block_size: usize) {
         self.sample_rate = sample_rate;
+        self.max_block_size = self.max_block_size.max(max_block_size);
         self.ensure_plans();
 
         let window_size = self.window_size();
         self.ensure_window(window_size);
-        self.resize_for_window(window_size, max_block_size);
+        self.resize_for_window(window_size, self.max_block_size);
     }
 
     fn reset(&mut self) {
@@ -556,7 +576,10 @@ impl AkiFxModule for SpectralCompressorModule {
         // Handle runtime window size changes
         if self.cached_window_size != window_size {
             self.ensure_window(window_size);
-            self.resize_for_window(window_size, left.len().max(256));
+            if left.len() > self.max_block_size {
+                self.max_block_size = left.len();
+            }
+            self.resize_for_window(window_size, self.max_block_size);
         }
 
         self.ensure_plans();
@@ -668,6 +691,7 @@ mod tests {
             params,
             bypass,
             sample_rate: SR,
+            max_block_size: 0,
             plans: None,
             window: Vec::new(),
             cached_window_size: 0,

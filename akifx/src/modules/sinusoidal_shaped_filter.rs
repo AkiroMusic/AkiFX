@@ -339,7 +339,11 @@ impl AkiFxModule for SinusoidalShapedFilterModule {
             dry_buf_r,
             ..
         } = self;
-        let engine = engine.as_mut().expect("engine must be initialized");
+        // Engine construction is guaranteed during initialize(); skip this
+        // block rather than panicking in the host's audio callback if not.
+        let Some(engine) = engine.as_mut() else {
+            return;
+        };
         let input_channels: &[&[f32]] = &[&dry_buf_l[..left.len()], &dry_buf_r[..right.len()]];
         let output_channels: &mut [&mut [f32]] = &mut [left, right];
         let index_scale = dsp_state.index_scale;
