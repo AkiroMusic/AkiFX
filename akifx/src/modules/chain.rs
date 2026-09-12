@@ -32,6 +32,10 @@ pub struct ModuleChain {
     /// Current processing order. `order[i]` is the index of the module
     /// that processes audio in position `i`.
     order: SharedOrder,
+    /// Audio-thread local copy of the order. Refreshed from `order` only
+    /// when the shared order actually differs, so steady-state processing
+    /// performs a lock + element-wise compare instead of a Vec clone.
+    cached_order: Vec<usize>,
 }
 
 impl ModuleChain {
@@ -40,6 +44,7 @@ impl ModuleChain {
         Self {
             modules: Vec::new(),
             order: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
+            cached_order: Vec::new(),
         }
     }
 
@@ -52,6 +57,7 @@ impl ModuleChain {
         // Extend identity order to include the new module.
         let idx = self.modules.len() - 1;
         self.order.lock().push(idx);
+        self.cached_order.push(idx);
     }
 
     /// Replace the processing order.
@@ -98,20 +104,28 @@ impl ModuleChain {
     /// Same as [`ModuleChain::process()`] but forwards MIDI note events to
     /// every active module (each module decides whether it uses them).
     ///
-    /// The current processing order is read by cloning the order Vec under
-    /// the mutex lock, then the lock is dropped immediately before any
-    /// module processing begins. This keeps audio-thread lock hold time
-    /// to microseconds.
+    /// The shared order is compared against the audio thread's cached copy
+    /// under the lock (no allocation); the cached copy is refreshed only
+    /// when the GUI/init thread actually changed the order.
     pub fn process_with_midi(
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
         note_events: &[nih_plug::midi::NoteEvent<()>],
     ) {
-        // Clone order under lock, drop lock immediately.
-        let order = self.order.lock().clone();
+        // Refresh the local order cache if the shared order changed. The
+        // lock is held only for the (allocation-free) comparison.
+        {
+            let shared = self.order.lock();
+            if shared.len() != self.cached_order.len()
+                || shared.iter().ne(self.cached_order.iter())
+            {
+                self.cached_order.clear();
+                self.cached_order.extend_from_slice(&shared);
+            }
+        }
 
-        for &idx in &order {
+        for &idx in &self.cached_order {
             // Defensive: skip invalid indices.
             if let Some(module) = self.modules.get_mut(idx) {
                 if !module.is_bypassed() {
@@ -130,7 +144,9 @@ impl ModuleChain {
     /// old `max()` semantics in the single-latency case, but correct for
     /// the general multi-latency future.
     pub fn latency_samples(&self) -> u64 {
-        let order = self.order.lock().clone();
+        // Sum under the lock (no clone/allocation; the lock is uncontended
+        // in practice and held for a handful of atomic loads).
+        let order = self.order.lock();
         order
             .iter()
             .filter_map(|&idx| self.modules.get(idx))

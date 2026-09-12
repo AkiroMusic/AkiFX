@@ -100,6 +100,9 @@ pub struct FrequencyShiftModule {
     /// Dry signal buffers for mix blending.
     dry_buf_l: Vec<f32>,
     dry_buf_r: Vec<f32>,
+    /// Scratch for the spectral callback (num_bins), so FFT frames don't
+    /// allocate on the audio thread.
+    scratch_polar: Vec<Polar>,
 }
 
 impl FrequencyShiftModule {
@@ -113,6 +116,7 @@ impl FrequencyShiftModule {
             fft_size: DEFAULT_FFT_SIZE,
             dry_buf_l: Vec::new(),
             dry_buf_r: Vec::new(),
+            scratch_polar: Vec::new(),
         }
     }
 
@@ -131,6 +135,10 @@ impl FrequencyShiftModule {
             window: WindowType::Hann,
         };
         self.engine = Some(SpectralEngine::new(config, 2));
+        let num_bins = self.fft_size / 2;
+        if self.scratch_polar.len() != num_bins {
+            self.scratch_polar = vec![Polar::new(0.0, 0.0); num_bins];
+        }
     }
 
     /// Ensure dry buffers are large enough for the current block size.
@@ -210,6 +218,7 @@ impl AkiFxModule for FrequencyShiftModule {
         // Process through spectral engine.
         // Engine construction is guaranteed during initialize(); skip this
         // block rather than panicking in the host's audio callback if not.
+        let scratch: &mut [Polar] = &mut self.scratch_polar;
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
@@ -217,7 +226,9 @@ impl AkiFxModule for FrequencyShiftModule {
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
             &mut |num_bins, polar| {
-                frequency_shift_callback(polar, num_bins, bin_shift, shift_start, shift_end, scale);
+                frequency_shift_callback(
+                    polar, num_bins, bin_shift, shift_start, shift_end, scale, scratch,
+                );
             },
         );
     }
@@ -233,6 +244,9 @@ fn frequency_shift_callback(
     shift_start: usize,
     shift_end: usize,
     scale: f32,
+    // Caller-owned scratch (reused across frames so the audio thread never
+    // allocates).
+    tmp: &mut [Polar],
 ) {
     let scale_is_zero = (scale - 0.0).abs() < f32::EPSILON;
 
@@ -241,8 +255,10 @@ fn frequency_shift_callback(
         return; // polar already contains input (in-place from engine)
     }
 
-    // We need a temporary buffer to avoid overwriting input during remapping
-    let mut tmp = vec![Polar::new(0.0, 0.0); num_bins];
+    // A temporary buffer is needed to avoid overwriting input during
+    // remapping; zero it for this frame (it is reused across frames).
+    let tmp = &mut tmp[..num_bins];
+    tmp.fill(Polar::new(0.0, 0.0));
 
     // Step 1: Scale transformation (if scale is non-zero)
     // out[floor(i * scale)] = in[i] for all i where newIndex < numBins
@@ -679,7 +695,7 @@ mod tests {
             .collect();
         let original = polar.clone();
 
-        frequency_shift_callback(&mut polar, num_bins, 0, 0, num_bins, 1.0);
+        frequency_shift_callback(&mut polar, num_bins, 0, 0, num_bins, 1.0, &mut vec![Polar::new(0.0, 0.0); num_bins]);
 
         for (i, (got, expected)) in polar.iter().zip(original.iter()).enumerate() {
             assert!(
@@ -698,7 +714,7 @@ mod tests {
             .map(|i| Polar::new(i as f32 + 1.0, 0.0))
             .collect();
 
-        frequency_shift_callback(&mut polar, num_bins, 0, 0, num_bins, 2.0);
+        frequency_shift_callback(&mut polar, num_bins, 0, 0, num_bins, 2.0, &mut vec![Polar::new(0.0, 0.0); num_bins]);
 
         // in[0] → out[0], in[1] → out[2], in[2] → out[4], in[3] → out[6]
         assert_eq!(polar[0].magnitude, 1.0);
@@ -719,7 +735,7 @@ mod tests {
             .collect();
 
         // bin_shift=2, shift_start=0, shift_end=6 (halfSize - 2 = 8 - 2 = 6)
-        frequency_shift_callback(&mut polar, num_bins, 2, 0, 6, 0.0);
+        frequency_shift_callback(&mut polar, num_bins, 2, 0, 6, 0.0, &mut vec![Polar::new(0.0, 0.0); num_bins]);
 
         // in[0] → out[2], in[1] → out[3], ..., in[5] → out[7]
         assert_eq!(polar[2].magnitude, 1.0);
@@ -742,7 +758,7 @@ mod tests {
             .collect();
 
         // bin_shift=-2, shift_start=2, shift_end=8
-        frequency_shift_callback(&mut polar, num_bins, -2, 2, 8, 0.0);
+        frequency_shift_callback(&mut polar, num_bins, -2, 2, 8, 0.0, &mut vec![Polar::new(0.0, 0.0); num_bins]);
 
         // in[2] → out[0], in[3] → out[1], ..., in[7] → out[5]
         assert_eq!(polar[0].magnitude, 3.0);

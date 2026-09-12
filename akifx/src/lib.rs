@@ -251,6 +251,9 @@ pub struct AkiFx {
     /// compensate delay based on this — reporting it only in `initialize()`
     /// left the host with a stale value).
     reported_latency: u32,
+    /// Reused event buffer for the block's MIDI input (avoids a fresh
+    /// allocation on every block that carries MIDI).
+    events_scratch: Vec<NoteEvent<()>>,
 }
 
 impl Default for AkiFx {
@@ -263,6 +266,7 @@ impl Default for AkiFx {
             mono_scratch_l: Vec::new(),
             mono_scratch_r: Vec::new(),
             reported_latency: 0,
+            events_scratch: Vec::new(),
         }
     }
 }
@@ -376,7 +380,8 @@ impl Plugin for AkiFx {
         // the chain (each module consumes what it understands). MIDI CC
         // events used to be dropped here, which made the MIDI Inverter's CC
         // transformation and Poly Mod Synth's choke handling unreachable.
-        let mut note_events = Vec::new();
+        let note_events = &mut self.events_scratch;
+        note_events.clear();
         while let Some(event) = context.next_event() {
             note_events.push(event);
         }

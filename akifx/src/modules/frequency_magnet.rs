@@ -120,6 +120,26 @@ pub struct FrequencyMagnetModule {
     /// Dry signal buffers for mix blending (unused — always wet).
     dry_buf_l: Vec<f32>,
     dry_buf_r: Vec<f32>,
+    /// Reused scratch for the spectral callback so FFT frames never
+    /// allocate on the audio thread.
+    scratch: MagnetScratch,
+}
+
+/// Scratch buffers for [`spectral_process_magnet`], reused across FFT frames.
+struct MagnetScratch {
+    in_mag: Vec<f32>,
+    in_phase: Vec<f32>,
+    temp: Vec<f32>,
+}
+
+impl MagnetScratch {
+    fn new(num_bins: usize, fft_size: usize) -> Self {
+        Self {
+            in_mag: vec![0.0; num_bins],
+            in_phase: vec![0.0; num_bins],
+            temp: vec![0.0; fft_size],
+        }
+    }
 }
 
 impl FrequencyMagnetModule {
@@ -133,6 +153,7 @@ impl FrequencyMagnetModule {
             fft_size: DEFAULT_FFT_SIZE,
             dry_buf_l: Vec::new(),
             dry_buf_r: Vec::new(),
+            scratch: MagnetScratch::new(DEFAULT_FFT_SIZE / 2, DEFAULT_FFT_SIZE),
         }
     }
 
@@ -151,6 +172,10 @@ impl FrequencyMagnetModule {
             window: WindowType::Hann,
         };
         self.engine = Some(SpectralEngine::new(config, 2));
+        let num_bins = self.fft_size / 2;
+        if self.scratch.in_mag.len() != num_bins {
+            self.scratch = MagnetScratch::new(num_bins, self.fft_size);
+        }
     }
 
     /// Ensure dry buffers are large enough for the current block size.
@@ -218,10 +243,12 @@ impl AkiFxModule for FrequencyMagnetModule {
         // Process through spectral engine with frequency magnet callback.
         // Engine construction is guaranteed during initialize(); skip this
         // block rather than panicking in the host's audio callback if not.
+        let sample_rate = self.sample_rate;
+        let fft_size = self.fft_size;
+        let scratch: &mut MagnetScratch = &mut self.scratch;
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
-        let fft_size = self.fft_size;
         engine.process(
             &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
             &mut [left, right],
@@ -230,11 +257,12 @@ impl AkiFxModule for FrequencyMagnetModule {
                     polar,
                     num_bins,
                     fft_size,
-                    self.sample_rate,
+                    sample_rate,
                     target_freq,
                     width,
                     width_bias_raw,
                     use_legacy,
+                    scratch,
                 );
             },
         );
@@ -259,6 +287,7 @@ fn spectral_process_magnet(
     width: f32,
     width_bias_raw: f32,
     use_legacy: bool,
+    scratch: &mut MagnetScratch,
 ) {
     // Compute width bias exponent and lower limit (faithful to C++)
     let width_bias = width_bias_raw * 3.0;
@@ -280,8 +309,19 @@ fn spectral_process_magnet(
     // Snapshot input magnitudes and phases. The C++ code has separate `in` and
     // `out` polar vectors, but the Rust engine callback provides a single
     // `&mut [Polar]` buffer, so we must read all inputs before writing outputs.
-    let in_mag: Vec<f32> = polar.iter().map(|p| p.magnitude).collect();
-    let in_phase: Vec<f32> = polar.iter().map(|p| p.phase).collect();
+    // The scratch buffers are reused across frames (no allocation here).
+    let in_mag = &mut scratch.in_mag;
+    let in_phase = &mut scratch.in_phase;
+    in_mag.clear();
+    in_mag.resize(num_bins, 0.0);
+    in_phase.clear();
+    in_phase.resize(num_bins, 0.0);
+    for (dst, src) in in_mag.iter_mut().zip(polar.iter()) {
+        *dst = src.magnitude;
+    }
+    for (dst, src) in in_phase.iter_mut().zip(polar.iter()) {
+        *dst = src.phase;
+    }
 
     // Zero the output buffer (matches C++ `utilities::emptyPolar(out)`)
     for p in polar.iter_mut() {
@@ -292,7 +332,8 @@ fn spectral_process_magnet(
     // The C++ `temp` vector has `bins` elements, but the code indexes it with
     // values up to `fft_size - 1` via the `out.size()` clip, so we size to
     // `fft_size` for safety.
-    let mut temp = vec![0.0f32; fft_size];
+    let temp = &mut scratch.temp[..fft_size];
+    temp.fill(0.0);
 
     // ── Below target bin ────────────────────────────────────────────────
     for i in 0..target_bin {

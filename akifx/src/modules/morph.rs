@@ -224,6 +224,9 @@ pub struct MorphModule {
     morph_points: Vec<i32>,
     /// Cached control point values for change detection.
     cached_cp: [f32; NUM_CONTROL_POINTS],
+    /// Reused snapshot of the frame's input bins for the spectral callback
+    /// (the previous per-frame `.to_vec()` allocated on the audio thread).
+    input_bins: Vec<crate::stft::Polar>,
 }
 
 impl MorphModule {
@@ -240,6 +243,7 @@ impl MorphModule {
             cached_overlaps: -1,
             morph_points: Vec::new(),
             cached_cp: [0.0; NUM_CONTROL_POINTS],
+            input_bins: Vec::new(),
         }
     }
 
@@ -260,6 +264,10 @@ impl MorphModule {
         };
         self.engine = Some(SpectralEngine::new(config, 2));
         self.cached_overlaps = self.params.num_overlaps.value();
+        let num_bins = self.fft_size / 2;
+        if self.input_bins.len() != num_bins {
+            self.input_bins = vec![crate::stft::Polar::new(0.0, 0.0); num_bins];
+        }
     }
 
     /// Ensure dry buffers are large enough for the current block size.
@@ -369,6 +377,7 @@ impl AkiFxModule for MorphModule {
         // Faithfully ports MorphFFTProcessor::spectral_process:
         //   for each input bin i: out[morphPoints[i]] = in[i]
         let morph_points = &self.morph_points;
+        let input_bins: &mut [crate::stft::Polar] = &mut self.input_bins;
         // Engine construction is guaranteed during initialize(); skip this
         // block rather than panicking in the host's audio callback if not.
         let Some(engine) = self.engine.as_mut() else {
@@ -380,9 +389,10 @@ impl AkiFxModule for MorphModule {
             &mut |num_bins, polar| {
                 let bin_count = num_bins.min(polar.len());
 
-                // Build temporary copy of input bins
-                let input_bins: Vec<crate::stft::Polar> =
-                    polar[..bin_count].to_vec();
+                // Build a temporary copy of the input bins in the reused
+                // scratch buffer.
+                let input_bins = &mut input_bins[..bin_count];
+                input_bins.copy_from_slice(&polar[..bin_count]);
 
                 // Zero output (matching C++ spectral_process lines 9-12)
                 for bin in polar[..bin_count].iter_mut() {

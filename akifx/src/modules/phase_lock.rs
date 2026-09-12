@@ -97,6 +97,11 @@ struct PhaseLockState {
     target_phases: Vec<f32>, target_mags: Vec<f32>,
     lock_phase_state: LockState, lock_mag_state: LockState,
     transition_phase_state: TransitionState, transition_mag_state: TransitionState,
+    /// Snapshot of the current frame's phases (reused across frames — the
+    /// previous per-frame Vec allocations landed on the audio thread).
+    in_phases: Vec<f32>,
+    /// Snapshot of the current frame's magnitudes (reused).
+    in_mags: Vec<f32>,
     prng_state: u32,
 }
 
@@ -105,6 +110,7 @@ impl PhaseLockState {
         let half = fft_size / 2;
         Self { locked_phases: vec![0.0; half], locked_mags: vec![0.0; half],
                target_phases: vec![0.0; half], target_mags: vec![0.0; half],
+               in_phases: vec![0.0; half], in_mags: vec![0.0; half],
                lock_phase_state: LockState::new(), lock_mag_state: LockState::new(),
                transition_phase_state: TransitionState::new(sample_rate, fft_size as f32),
                transition_mag_state: TransitionState::new(sample_rate, fft_size as f32),
@@ -122,8 +128,17 @@ impl PhaseLockState {
         self.do_morph_transition(num_bins, polar);
     }
     fn do_lock(&mut self, num_bins: usize, polar: &mut [Polar], params: &PhaseLockProcessParams) {
-        let in_phases: Vec<f32> = polar.iter().take(num_bins).map(|p| p.phase).collect();
-        let in_mags: Vec<f32> = polar.iter().take(num_bins).map(|p| p.magnitude).collect();
+        // Snapshot the frame into reusable buffers (no allocation).
+        self.in_phases.clear();
+        self.in_phases.resize(num_bins, 0.0);
+        self.in_mags.clear();
+        self.in_mags.resize(num_bins, 0.0);
+        for (i, p) in polar.iter().take(num_bins).enumerate() {
+            self.in_phases[i] = p.phase;
+            self.in_mags[i] = p.magnitude;
+        }
+        let in_phases: &Vec<f32> = &self.in_phases;
+        let in_mags: &Vec<f32> = &self.in_mags;
         if self.lock_phase_state.should_transition_to_on() {
             self.locked_phases.clear();
             for i in 0..num_bins { self.locked_phases.push(in_phases[i]); }
@@ -146,7 +161,7 @@ impl PhaseLockState {
                 let mut out_phase = in_phase + (self.locked_phases[i] - in_phase) * params.phase_mix;
                 let in_mag = in_mags[i];
                 let out_mag = (in_mag + (self.locked_mags[i] - in_mag) * params.mag_mix) * scale;
-                let rand_phase = params.random_phase_mix * self.generate_random_phase();
+                let rand_phase = params.random_phase_mix * Self::generate_random_phase(&mut self.prng_state);
                 out_phase = rand_phase + (1.0 - params.random_phase_mix) * out_phase;
                 polar[i] = Polar::new(out_mag, out_phase);
             }
@@ -154,7 +169,7 @@ impl PhaseLockState {
             for i in 0..num_bins {
                 let in_phase = in_phases[i];
                 let mut out_phase = in_phase + (self.locked_phases[i] - in_phase) * params.phase_mix;
-                let rand_phase = params.random_phase_mix * self.generate_random_phase();
+                let rand_phase = params.random_phase_mix * Self::generate_random_phase(&mut self.prng_state);
                 out_phase = rand_phase + (1.0 - params.random_phase_mix) * out_phase;
                 polar[i] = Polar::new(in_mags[i], out_phase);
             }
@@ -162,13 +177,13 @@ impl PhaseLockState {
             for i in 0..num_bins {
                 let in_mag = in_mags[i];
                 let out_mag = (in_mag + (self.locked_mags[i] - in_mag) * params.mag_mix) * scale;
-                let rand_phase = params.random_phase_mix * self.generate_random_phase();
+                let rand_phase = params.random_phase_mix * Self::generate_random_phase(&mut self.prng_state);
                 let out_phase = rand_phase + (1.0 - params.random_phase_mix) * in_phases[i];
                 polar[i] = Polar::new(out_mag, out_phase);
             }
         } else {
             for i in 0..num_bins {
-                let rand_phase = params.random_phase_mix * self.generate_random_phase();
+                let rand_phase = params.random_phase_mix * Self::generate_random_phase(&mut self.prng_state);
                 let out_phase = rand_phase + (1.0 - params.random_phase_mix) * in_phases[i];
                 polar[i] = Polar::new(in_mags[i], out_phase);
             }
@@ -201,11 +216,11 @@ impl PhaseLockState {
             }
         }
     }
-    fn generate_random_phase(&mut self) -> f32 {
-        self.prng_state ^= self.prng_state << 13;
-        self.prng_state ^= self.prng_state >> 17;
-        self.prng_state ^= self.prng_state << 5;
-        let r = (self.prng_state % 1000) as f32;
+    fn generate_random_phase(prng_state: &mut u32) -> f32 {
+        *prng_state ^= *prng_state << 13;
+        *prng_state ^= *prng_state >> 17;
+        *prng_state ^= *prng_state << 5;
+        let r = (*prng_state % 1000) as f32;
         let p = (r / 1000.0) * std::f32::consts::TAU;
         p - std::f32::consts::PI
     }
