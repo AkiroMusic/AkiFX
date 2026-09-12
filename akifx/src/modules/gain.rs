@@ -32,8 +32,8 @@ impl GainParams {
                 "Gain",
                 util::db_to_gain(default_db),
                 FloatRange::Skewed {
-                    min: util::db_to_gain(-24.0),
-                    max: util::db_to_gain(24.0),
+                    min: util::db_to_gain(-30.0),
+                    max: util::db_to_gain(30.0),
                     factor: FloatRange::gain_skew_factor(-24.0, 24.0),
                 },
             )

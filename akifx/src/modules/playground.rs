@@ -63,7 +63,8 @@ pub struct PlaygroundParams {
     #[id = "threaded"]
     pub use_threaded_fft: BoolParam,
 
-    /// Use linear Hann window (when true, selects Rectangular window).
+    /// Legacy toggle, inert: upstream Playground never reads it (kept so
+    /// automations saved against earlier builds still recall).
     #[id = "linear_hann"]
     pub use_linear_hann: BoolParam,
 }
@@ -150,11 +151,12 @@ impl PlaygroundModule {
     /// Rebuild the spectral engine with current parameter values.
     fn build_engine(&mut self) {
         let overlap_count = self.params.num_overlaps.value() as usize;
-        let window = if self.params.use_linear_hann.value() {
-            WindowType::Rectangular
-        } else {
-            WindowType::Hann
-        };
+        // NOTE: the "Use Linear Hann" toggle is inert by design — upstream
+        // Playground never reads that parameter either (the window is set to
+        // Hann in its constructor and never changed). A previous port mapped
+        // the toggle to a rectangular window, which audibly diverged from
+        // the original plugin.
+        let window = WindowType::Hann;
         let config = SpectralConfig {
             fft_size: self.fft_size,
             overlap_count,

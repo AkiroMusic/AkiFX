@@ -92,7 +92,9 @@ pub struct SineGenModule {
     /// Phase accumulator, always in [0, 1).
     phase: f64,
     /// Whether a voice is currently active (NoteOn received, no NoteOff yet).
-    voice_active: bool,
+    /// Note gain envelope (velocity/pressure controlled, 5 ms linear) that
+    /// prevents clicks on note on/off, matching the upstream sine example.
+    midi_note_gain: Smoother<f32>,
     /// MIDI note ID of the currently active note.
     midi_note_id: u8,
     /// Exponential smoother for frequency transitions between notes.
@@ -107,7 +109,7 @@ impl SineGenModule {
             bypass,
             sample_rate: 1.0,
             phase: 0.0,
-            voice_active: false,
+            midi_note_gain: Smoother::new(SmoothingStyle::Linear(5.0)),
             midi_note_id: 0,
             frequency_smoother: Smoother::new(SmoothingStyle::Logarithmic(10.0)),
         }
@@ -158,7 +160,7 @@ impl AkiFxModule for SineGenModule {
 
     fn reset(&mut self) {
         self.phase = 0.0;
-        self.voice_active = false;
+        self.midi_note_gain.reset(0.0);
         self.midi_note_id = 0;
         self.frequency_smoother
             .reset(self.params.fallback_frequency.value());
@@ -184,29 +186,37 @@ impl AkiFxModule for SineGenModule {
                 && note_events[event_idx].timing() <= sample_idx as u32
             {
                 match note_events[event_idx] {
-                    NoteEvent::NoteOn { note, .. } => {
+                    NoteEvent::NoteOn { note, velocity, .. } => {
                         self.midi_note_id = note;
                         let freq = util::midi_note_to_freq(note);
                         self.frequency_smoother
                             .set_target(self.sample_rate, freq);
-                        self.voice_active = true;
+                        self.midi_note_gain.set_target(self.sample_rate, velocity);
                     }
                     NoteEvent::NoteOff { note, .. } if note == self.midi_note_id => {
-                        self.voice_active = false;
+                        // Ramp to silence instead of hard-gating to avoid
+                        // the release click (upstream uses the same 5 ms
+                        // linear gain envelope).
+                        self.midi_note_gain.set_target(self.sample_rate, 0.0);
+                    }
+                    NoteEvent::PolyPressure { note, pressure, .. }
+                        if note == self.midi_note_id =>
+                    {
+                        self.midi_note_gain.set_target(self.sample_rate, pressure);
                     }
                     _ => {}
                 }
                 event_idx += 1;
             }
 
-            let sample = if self.voice_active {
-                let freq = self.frequency_smoother.next() as f64;
-                let sine = self.calculate_sine(freq);
-                let gain = util::db_to_gain(self.params.level_db.smoothed.next());
-                sine * gain
-            } else {
-                0.0
-            };
+            // Always rendered: the gain envelope sits at 0 until a NoteOn,
+            // and its 5 ms ramp prevents clicks on both note edges (upstream
+            // model). The previous port hard-gated to 0.0, which clicked on
+            // every note release.
+            let freq = self.frequency_smoother.next() as f64;
+            let sine = self.calculate_sine(freq);
+            let level_gain = util::db_to_gain(self.params.level_db.smoothed.next());
+            let sample = sine * self.midi_note_gain.next() * level_gain;
 
             *l = sample;
             *r = sample;
@@ -382,14 +392,20 @@ mod tests {
         let mut right_b = vec![1.0; 256];
         module.process_with_midi(&mut left_b, &mut right_b, &events_off);
 
+        // The anti-click envelope ramps to silence over ~5 ms (~220 samples
+        // at 44.1 kHz), so the block's tail must be (near) silent rather than
+        // hard-cut at the NoteOff instant (the old hard gate clicked).
         for (i, (l, r)) in left_b.iter().zip(right_b.iter()).enumerate() {
+            if i < 240 {
+                continue; // 5 ms release ramp (~220 samples) still decaying
+            }
             assert!(
-                l.abs() < f32::EPSILON,
-                "left[{i}] should be silent after NoteOff, got {l}"
+                l.abs() < 1e-3,
+                "left[{i}] should have ramped to silence after NoteOff, got {l}"
             );
             assert!(
-                r.abs() < f32::EPSILON,
-                "right[{i}] should be silent after NoteOff, got {r}"
+                r.abs() < 1e-3,
+                "right[{i}] should have ramped to silence after NoteOff, got {r}"
             );
         }
     }

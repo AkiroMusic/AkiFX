@@ -231,6 +231,9 @@ struct Voice {
     buffer: RingBuffer,
     midi_note_id: Option<u8>,
     velocity_gain: f32,
+    /// Per-voice note-expression gain (PolyVolume), like upstream. Hosts
+    /// that automate per-note volume ramp this 5 ms linear smoother.
+    gain_expression_gain: Smoother<f32>,
     amp_envelope: AREnvelope,
 }
 
@@ -240,6 +243,7 @@ impl Default for Voice {
             buffer: RingBuffer::default(),
             midi_note_id: None,
             velocity_gain: 1.0,
+            gain_expression_gain: Smoother::new(SmoothingStyle::Linear(5.0)),
             amp_envelope: AREnvelope::default(),
         }
     }
@@ -264,6 +268,7 @@ impl Voice {
         } else {
             1.0
         };
+        self.gain_expression_gain.reset(1.0);
         self.amp_envelope.reset();
 
         let note_frequency = util::midi_note_to_freq(note)
@@ -529,6 +534,20 @@ impl AkiFxModule for BuffrGlitchModule {
                             }
                         }
                     }
+                    // Per-note volume automation (note expression), matching
+                    // upstream. The full-MIDI forwarding in the plugin makes
+                    // these events reachable.
+                    NoteEvent::PolyVolume { note, gain, .. } => {
+                        for voice in &mut self.voices {
+                            if voice.midi_note_id == Some(*note) {
+                                voice.gain_expression_gain.set_target(
+                                    self.sample_rate,
+                                    *gain,
+                                );
+                                break;
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 event_idx += 1;
@@ -548,7 +567,7 @@ impl AkiFxModule for BuffrGlitchModule {
                     continue;
                 }
                 let env = voice.amp_envelope.next_sample();
-                let amp = voice.velocity_gain * env;
+                let amp = voice.velocity_gain * voice.gain_expression_gain.next() * env;
                 max_envelope = max_envelope.max(env);
 
                 out_l += voice.buffer.next_sample(0, in_l) * amp;
