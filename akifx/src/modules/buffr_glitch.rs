@@ -458,6 +458,12 @@ impl AkiFxModule for BuffrGlitchModule {
         for voice in &mut self.voices {
             voice.buffer.resize(2, sample_rate);
         }
+        // Seed the dry-level smoother so non-host contexts (tests,
+        // standalone) don't ramp from silence.
+        self.params
+            .dry_level
+            .smoothed
+            .reset(self.params.dry_level.value());
     }
 
     fn reset(&mut self) {
@@ -483,8 +489,9 @@ impl AkiFxModule for BuffrGlitchModule {
         // We process sample-by-sample, applying events at their timing offset.
         let mut event_idx = 0;
 
-        // Cache param values (read once per block, matching source behaviour)
-        let dry_level = self.params.dry_level.value();
+        // Cache param values (read once per block, matching source behaviour).
+        // dry_level is smoothed per sample below (its declared exponential
+        // smoother used to be ignored, making dry/wet changes step abruptly).
         let attack_ms = self.params.attack_ms.value();
         let release_ms = self.params.release_ms.value();
 
@@ -549,7 +556,7 @@ impl AkiFxModule for BuffrGlitchModule {
             }
 
             // --- Mix dry signal (ducked by active voice envelope) ---
-            let dry_gain = (1.0 - max_envelope) * dry_level;
+            let dry_gain = (1.0 - max_envelope) * self.params.dry_level.smoothed.next();
             left[sample_idx] = out_l + in_l * dry_gain;
             right[sample_idx] = out_r + in_r * dry_gain;
         }

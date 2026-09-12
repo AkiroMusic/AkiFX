@@ -200,7 +200,9 @@ impl LoudnessWarWinnerModule {
 
     fn update_bp_filters(&mut self) {
         let cutoff = self.params.cutoff_hz.value();
-        // When win_harder is true, use full Q (factor = 1.0 -> Q ~ 30.0)
+        // `0.00001 + 30.0` is a faithful transcription of the upstream JSFX,
+        // where the epsilon guards a variable Q expression that was collapsed
+        // here to the constant full-Q case (~30.0). Kept verbatim on purpose.
         let q = 0.00001 + 30.0;
         let coeffs = BiquadCoefficients::bandpass(self.sample_rate, cutoff, q);
         for filters in &mut self.bp_filters {

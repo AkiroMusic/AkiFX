@@ -117,7 +117,8 @@ pub struct FrequencyMagnetModule {
     sample_rate: f32,
     engine: Option<SpectralEngine>,
     fft_size: usize,
-    /// Dry signal buffers for mix blending (unused — always wet).
+    /// Engine input snapshots: the engine processes these and writes to the
+    /// channel slices in place.
     dry_buf_l: Vec<f32>,
     dry_buf_r: Vec<f32>,
     /// Reused scratch for the spectral callback so FFT frames never

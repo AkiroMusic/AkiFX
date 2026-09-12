@@ -69,7 +69,7 @@ pub struct CompressorBank {
 #[derive(Params)]
 pub struct ThresholdParams {
     /// Global threshold in dB.
-    #[id = "tresh_global"]
+    #[id = "thresh_global"]
     pub threshold_db: FloatParam,
     /// Center frequency for the threshold curve.
     #[id = "thresh_center_freq"]
@@ -514,38 +514,6 @@ impl CompressorBank {
         }
     }
 
-    /// Resize internal buffers for new capacity.
-    pub fn update_capacity(&mut self, num_channels: usize, max_window_size: usize) {
-        let complex_len = max_window_size / 2 + 1;
-        self.ln_freqs
-            .reserve_exact(complex_len.saturating_sub(self.ln_freqs.len()));
-        self.downwards_thresholds_db
-            .reserve_exact(complex_len.saturating_sub(self.downwards_thresholds_db.len()));
-        self.downwards_ratios
-            .reserve_exact(complex_len.saturating_sub(self.downwards_ratios.len()));
-        self.downwards_knee_parabola_scale
-            .reserve_exact(complex_len.saturating_sub(self.downwards_knee_parabola_scale.len()));
-        self.downwards_knee_parabola_intercept.reserve_exact(
-            complex_len.saturating_sub(self.downwards_knee_parabola_intercept.len()),
-        );
-        self.upwards_thresholds_db
-            .reserve_exact(complex_len.saturating_sub(self.upwards_thresholds_db.len()));
-        self.upwards_ratios
-            .reserve_exact(complex_len.saturating_sub(self.upwards_ratios.len()));
-        self.upwards_knee_parabola_scale
-            .reserve_exact(complex_len.saturating_sub(self.upwards_knee_parabola_scale.len()));
-        self.upwards_knee_parabola_intercept
-            .reserve_exact(complex_len.saturating_sub(self.upwards_knee_parabola_intercept.len()));
-        self.envelopes.resize_with(num_channels, Vec::new);
-        for env in &mut self.envelopes {
-            env.reserve_exact(complex_len.saturating_sub(env.len()));
-        }
-        self.sidechain_spectrum_magnitudes
-            .resize_with(num_channels, Vec::new);
-        for mag in &mut self.sidechain_spectrum_magnitudes {
-            mag.reserve_exact(complex_len.saturating_sub(mag.len()));
-        }
-    }
 
     /// Resize compressors to match the current window size.
     pub fn resize(&mut self, sample_rate: f32, window_size: usize) {

@@ -204,13 +204,6 @@ impl PolyModSynthModule {
 
     /// Find a voice index by its voice ID, if the voice exists.
     ///
-    /// Used by CLAP poly modulation event routing (not active in VST3 context).
-    #[allow(dead_code)]
-    fn get_voice_idx(&self, voice_id: i32) -> Option<usize> {
-        self.voices
-            .iter()
-            .position(|v| matches!(v, Some(v) if v.voice_id == voice_id))
-    }
 
     /// Start a new voice. If all 16 slots are occupied, the oldest voice is stolen.
     fn start_voice(&mut self, voice_id: Option<i32>, channel: u8, note: u8, velocity: f32) {

@@ -398,7 +398,7 @@ mod tests {
     fn latency_excludes_bypassed_modules() {
         let mut chain = ModuleChain::new();
         chain.push(Box::new(LatencyModule::new(100)));
-        let mut m2 = LatencyModule::new(200);
+        let m2 = LatencyModule::new(200);
         m2.set_bypass(true);
         chain.push(Box::new(m2));
         chain.push(Box::new(LatencyModule::new(50)));
@@ -416,10 +416,10 @@ mod tests {
     #[test]
     fn latency_all_bypassed_is_zero() {
         let mut chain = ModuleChain::new();
-        let mut m1 = LatencyModule::new(100);
+        let m1 = LatencyModule::new(100);
         m1.set_bypass(true);
         chain.push(Box::new(m1));
-        let mut m2 = LatencyModule::new(200);
+        let m2 = LatencyModule::new(200);
         m2.set_bypass(true);
         chain.push(Box::new(m2));
 

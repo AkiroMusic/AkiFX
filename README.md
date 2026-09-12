@@ -8,11 +8,11 @@
 |---|---|
 | **VST3** | `target/bundled/AkiFX.vst3/` |
 | **CLAP** | `target/bundled/AkiFX.clap` |
-| 独立运行版 | `target/bundled/akifx-standalone.exe`（WASAPI/JACK，可用于无 DAW 测试） |
+| 独立运行版 | `target/bundled/AkiFX-standalone.exe`（WASAPI/JACK，可用于无 DAW 测试） |
 
 ## 内置模块（21 个）
 
-### 来自 SpectralSuite（共享 STFT 频谱引擎）
+### 来自 SpectralSuite（共享同一套 STFT 频谱处理代码，各自持有独立的 STFT 实例）
 - **SpectralGate** — 频谱门限
 - **FrequencyShift** — 频谱搬移
 - **FrequencyMagnet** — 频率吸附

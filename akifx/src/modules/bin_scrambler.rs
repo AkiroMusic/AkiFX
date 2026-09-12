@@ -233,24 +233,6 @@ impl BinScramblerModule {
         (scatter_amount, scramble_factor)
     }
 
-    /// Get the current index buffer slice (the "to" buffer for interpolation).
-    fn current_indices(&self) -> &[i32] {
-        if self.current_ptr == 0 {
-            &self.indices_a
-        } else {
-            &self.indices_b
-        }
-    }
-
-    /// Get the previous index buffer slice (the "from" buffer for interpolation).
-    fn previous_indices(&self) -> &[i32] {
-        if self.current_ptr == 0 {
-            &self.indices_b
-        } else {
-            &self.indices_a
-        }
-    }
-
     /// Swap the current and previous index buffers.
     fn swap_buffers(&mut self) {
         self.current_ptr = 1 - self.current_ptr;

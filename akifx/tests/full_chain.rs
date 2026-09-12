@@ -5,7 +5,7 @@
 
 use akifx::modules::ModuleChain;
 use akifx::AkiFxParams;
-use nih_plug::prelude::*;
+
 use std::sync::Arc;
 
 /// Build the real module set and return (chain, params).

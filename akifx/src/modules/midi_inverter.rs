@@ -77,7 +77,7 @@ pub struct MidiInverterModule {
     params: Arc<MidiInverterParams>,
     bypass: Arc<AtomicBool>,
     /// Queue of transformed MIDI events produced during the last `process_with_midi` call.
-    /// Consumed by [`take_transformed_events`].
+    /// Consumed by the trait's [`AkiFxModule::take_output_midi`].
     transformed_queue: Vec<NoteEvent<()>>,
 }
 
@@ -85,7 +85,7 @@ impl MidiInverterModule {
     /// Create a new module with shared params and bypass flag.
     ///
     /// The `Arc<MidiInverterParams>` should also be given to the umbrella
-    /// `AkiFxParams` via `#[nested(id_prefix = "midi_inv")]` for host
+    /// `AkiFxParams` via `#[nested(id_prefix = "midi_inverter")]` for host
     /// serialization.
     pub fn new(params: Arc<MidiInverterParams>, bypass: Arc<AtomicBool>) -> Self {
         Self {
@@ -100,15 +100,6 @@ impl MidiInverterModule {
         let params = Arc::new(MidiInverterParams::default());
         let bypass = Arc::new(AtomicBool::new(false));
         Self::new(params, bypass)
-    }
-
-    /// Drain the internal queue of transformed MIDI events.
-    ///
-    /// The plugin-level MIDI output routing (integration wave) will call
-    /// this after each `process_with_midi` to send transformed events to
-    /// the host's MIDI output.
-    pub fn take_transformed_events(&mut self) -> Vec<NoteEvent<()>> {
-        std::mem::take(&mut self.transformed_queue)
     }
 }
 
@@ -650,10 +641,10 @@ mod tests {
         }
     }
 
-    // ---- Queue drain via take_transformed_events ----
+    // ---- Queue drain via take_output_midi ----
 
     #[test]
-    fn take_transformed_events_drains_queue() {
+    fn take_output_midi_drains_queue() {
         let mut module = make_module();
 
         let events = vec![
@@ -665,19 +656,21 @@ mod tests {
         let mut right = vec![0.0; 32];
         module.process_with_midi(&mut left, &mut right, &events);
 
-        let taken = module.take_transformed_events();
+        let taken = module.take_output_midi();
         assert_eq!(taken.len(), 2, "should have 2 transformed events");
 
         // Queue should now be empty
-        let empty = module.take_transformed_events();
+        let empty = module.take_output_midi();
         assert_eq!(empty.len(), 0, "queue should be empty after drain");
     }
 
     // ---- process_with_midi disabled state (bypass) ----
 
     #[test]
-    fn disabled_state_passes_events_through_unchanged() {
-        // Create module with enable param defaulting to false
+    fn disabled_state_emits_no_events() {
+        // When disabled, the module must not emit anything: the original
+        // events already reach the host via MIDI thru and the other chain
+        // modules via the broadcast, so echoing them would duplicate.
         let params = Arc::new(MidiInverterParams::new(false));
         let bypass = Arc::new(AtomicBool::new(false));
         let mut module = MidiInverterModule::new(params, bypass);
@@ -695,7 +688,7 @@ mod tests {
         let mut right = vec![0.0; 32];
         module.process_with_midi(&mut left, &mut right, &events);
 
-        let taken = module.take_transformed_events();
+        let taken = module.take_output_midi();
         assert_eq!(taken.len(), 0, "disabled module should not transform events");
     }
 }

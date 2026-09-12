@@ -102,10 +102,11 @@ impl AkiFxModule for GainModule {
     }
 
     fn initialize(&mut self, _sample_rate: f32, _max_block_size: usize) {
-        // The nih-plug wrapper calls update_smoother() on all params during
-        // plugin initialization, which properly sets up the smoother. For
-        // standalone testing, the smoother is left in its default state; the
-        // process method reads the plain value directly.
+        // Seed the smoother with the current value: the nih-plug wrapper
+        // initializes smoothers for us in a host, but tests and the
+        // standalone binary construct modules directly, and an unseeded
+        // smoother would ramp from 0 (silence).
+        self.params.gain.smoothed.reset(self.params.gain.value());
     }
 
     fn reset(&mut self) {
@@ -114,14 +115,13 @@ impl AkiFxModule for GainModule {
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        // Read the current gain value. In host context, the wrapper ensures
-        // the smoother is set up before the first process() call.
-        let gain = self.params.gain.value();
-        for sample in left.iter_mut() {
+        // Step the smoother once per sample so parameter changes ramp
+        // instead of zipper-crackling (the smoother used to be declared but
+        // never stepped, leaving the DSP on the raw value).
+        for (sample, r) in left.iter_mut().zip(right.iter_mut()) {
+            let gain = self.params.gain.smoothed.next();
             *sample *= gain;
-        }
-        for sample in right.iter_mut() {
-            *sample *= gain;
+            *r *= gain;
         }
     }
 }

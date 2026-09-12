@@ -944,7 +944,6 @@ mod tests {
 
     #[test]
     fn dry_wet_zero_is_dry_passthrough() {
-        let compressor_bank = CompressorBank::new(2, MAX_WINDOW_SIZE);
         let global = Arc::new(GlobalParams::with_test_values(
             DEFAULT_WINDOW_ORDER as i32,
             DEFAULT_OVERLAP_ORDER as i32,

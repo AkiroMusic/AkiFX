@@ -102,9 +102,9 @@ pub fn body(size: f32) -> egui::FontId {
     egui::FontId::new(zs(size), FontFamily::Name("inter".into()))
 }
 
-/// Heading font — Cormorant SemiBold if registered, else Inter Medium.
+/// Heading font — Cormorant Garamond SemiBold (bound in `load_fonts`).
 pub fn heading(size: f32) -> egui::FontId {
-    egui::FontId::new(zs(size), FontFamily::Name("inter_medium".into()))
+    egui::FontId::new(zs(size), FontFamily::Name("cormorant".into()))
 }
 
 /// Monospace font (zoom-scaled).
@@ -182,11 +182,9 @@ pub fn configure_visuals(ctx: &egui::Context) {
 // Font loading
 // ---------------------------------------------------------------------------
 
-/// Load custom fonts: Inter (body) as the primary proportional font.
-///
-/// Cormorant Garamond (heading serif) download failed (network blocked);
-/// uses egui default proportional as fallback. TODO: embed Cormorant Garamond
-/// when the TTF is available in assets/fonts/.
+/// Load custom fonts: Inter (body), Noto Sans SC (CJK fallback) and
+/// Cormorant Garamond SemiBold (display/heading serif, served by
+/// [`heading`]).
 pub fn load_fonts(ctx: &egui::Context) {
     #[allow(unused_mut)]
     let mut fonts = FontDefinitions::default();
@@ -203,6 +201,16 @@ pub fn load_fonts(ctx: &egui::Context) {
         fonts
             .font_data
             .insert("inter_medium".to_owned(), FontData::from_static(inter_medium).into());
+    }
+
+    // ── Cormorant Garamond SemiBold (display serif) ────────────────────
+    #[cfg(not(test))]
+    {
+        let cormorant = include_bytes!("../../assets/fonts/CormorantGaramond-SemiBold.ttf");
+        fonts.font_data.insert(
+            "cormorant".to_owned(),
+            FontData::from_static(cormorant).into(),
+        );
     }
 
     // ── Noto Sans SC (CJK fallback) ───────────────────────────────────
@@ -235,13 +243,16 @@ pub fn load_fonts(ctx: &egui::Context) {
             FontFamily::Name("inter_medium".into()),
             vec!["inter_medium".to_owned(), "noto_sans_sc".to_owned()],
         );
+        fonts.families.insert(
+            FontFamily::Name("cormorant".into()),
+            vec![
+                "cormorant".to_owned(),
+                "inter".to_owned(),
+                "noto_sans_sc".to_owned(),
+            ],
+        );
     }
 
-    // TODO: When CormorantGaramond-SemiBold.ttf is available:
-    //   fonts.font_data.insert("cormorant".to_owned(), FontData::from_static(
-    //       include_bytes!("../../assets/fonts/CormorantGaramond-SemiBold.ttf")));
-    //   Use FontTweak { size: 18.0, y_offset: 0.0, ..Default::default() }
-    //   to override heading sizes. For now, headings use Inter.
 
     ctx.set_fonts(fonts);
 
@@ -291,28 +302,6 @@ pub fn section_label_raw(text: &str) -> RichText {
         .color(MIST_400)
 }
 
-/// Paint subtle ambient radial glows behind the UI (Ethereal Glass lean).
-///
-/// Very cheap: 3 glows x 8 concentric circles = 24 circle_filled calls per
-/// frame on the Background layer. Tints derive from the existing jade/sand
-/// palette plus a faint violet secondary, all low alpha.
-pub fn paint_ambient_glows(painter: &egui::Painter, rect: egui::Rect) {
-    let glows = [
-        (egui::pos2(rect.left() + rect.width() * 0.14, rect.top() + rect.height() * 0.10), 220.0, JADE_400, 8),
-        (egui::pos2(rect.right() - rect.width() * 0.10, rect.top() + rect.height() * 0.20), 180.0, Color32::from_rgba_unmultiplied(0x6b, 0x5c, 0x9e, 14), 8),
-        (egui::pos2(rect.left() + rect.width() * 0.08, rect.bottom() - rect.height() * 0.12), 160.0, SAND_400, 6),
-        (egui::pos2(rect.right() - rect.width() * 0.16, rect.bottom() - rect.height() * 0.10), 200.0, JADE_400, 6),
-    ];
-    for (center, radius, base, steps) in glows {
-        for i in 0..steps {
-            let t = i as f32 / steps as f32;
-            let r = radius * (1.0 - t * 0.65);
-            let a = (base.a() as f32 * (1.0 - t)).round() as u8;
-            let c = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), a);
-            painter.circle_filled(center, r, c);
-        }
-    }
-}
 
 /// Power toggle pill: 36×20 track with a 16px knob.
 /// Returns the `Response` — call `.clicked()` on it to toggle.

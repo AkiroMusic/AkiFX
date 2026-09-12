@@ -348,7 +348,7 @@ fn render_top_bar(ui: &mut egui::Ui, total_width: f32) {
         Vec2::new(total_width, TOP_BAR_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            // AkiFX wordmark (Cormorant unavailable — fallback to inter_medium)
+            // AkiFX wordmark (Cormorant Garamond SemiBold)
             ui.label(
                 RichText::new("AkiFX")
                     .font(theme::heading(20.0))
@@ -678,7 +678,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                         p.text(
                             Pos2::new(row_rect.right() - 12.0, row_rect.top() + ROW_HEIGHT * 0.5),
                             egui::Align2::RIGHT_CENTER,
-                        format!("{}s", entry.latency_samples),
+                        format!("{} samples", entry.latency_samples),
                         theme::mono(9.0),
                         theme::SAND_400,
                         );
@@ -806,7 +806,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
 
     ui.add_space(12.0);
 
-    // Module name heading (Cormorant unavailable — fallback to inter_medium 18px).
+    // Module name heading (Cormorant Garamond SemiBold, 18px).
     ui.label(
         RichText::new(entry.name)
             .font(theme::heading(18.0))
