@@ -595,6 +595,8 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // LED toggle — click to bypass/enable
                 if led_resp.clicked() && !drag.active {
                     entry.bypass.store(is_active, Ordering::Relaxed);
+                    // Persist the new state so the host saves it.
+                    crate::gui::state::sync_persisted_enabled(state.params.as_ref(), &state.entries);
                 }
 
                 // LED tooltip (multiline: state + description)
@@ -840,6 +842,8 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
             .clicked()
         {
             entry.bypass.store(is_active, Ordering::Relaxed);
+            // Persist the new state so the host saves it.
+            crate::gui::state::sync_persisted_enabled(state.params.as_ref(), &state.entries);
             ui.ctx().request_repaint();
         }
 
@@ -1036,7 +1040,8 @@ mod tests {
     #[test]
     fn ordered_entries_identity() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
         let identity: Vec<usize> = (0..21).collect();
 
         let ordered = ordered_entries(&entries, &identity);
@@ -1050,7 +1055,8 @@ mod tests {
     #[test]
     fn ordered_entries_custom_permutation() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
         // Reverse order: last module first.
         let reversed: Vec<usize> = (0..21).rev().collect();
 
@@ -1064,7 +1070,8 @@ mod tests {
     #[test]
     fn ordered_entries_filters_invalid_indices() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
         let order_with_gaps = vec![0, 99, 1, 200, 2];
 
         let ordered = ordered_entries(&entries, &order_with_gaps);
@@ -1132,7 +1139,8 @@ mod tests {
     #[test]
     fn selected_preserves_module_identity_after_reorder() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
 
         // selected = module index 19 (Gain)
         let selected_module: usize = 19;
@@ -1153,7 +1161,8 @@ mod tests {
     #[test]
     fn selected_zero_follows_module_not_position() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
 
         // Reversed order: module 20 (Safety Limiter) is at position 0
         let reversed: Vec<usize> = (0..21).rev().collect();
@@ -1171,7 +1180,8 @@ mod tests {
     #[test]
     fn selected_as_position_fails_after_reorder() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
 
         // Before reorder: identity order, user clicks position 19 → Gain
         let identity: Vec<usize> = (0..21).collect();
@@ -1204,7 +1214,8 @@ mod tests {
     #[test]
     fn param_panel_resolves_selected_module_by_index() {
         let params = AkiFxParams::default();
-        let entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let entries = state::build_ui_entries(&params, chain.modules());
         let order: Vec<usize> = (0..21).rev().collect();
 
         // Select module 19 (Gain) — stored as module_idx, not position
@@ -1221,7 +1232,8 @@ mod tests {
     #[test]
     fn param_panel_handles_absent_module_gracefully() {
         let params = AkiFxParams::default();
-        let _entries = state::build_ui_entries(&params);
+        let chain = crate::create_default_chain(&params);
+        let _entries = state::build_ui_entries(&params, chain.modules());
         let order: Vec<usize> = (0..21).collect();
 
         // Module 99 doesn't exist

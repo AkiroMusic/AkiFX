@@ -2,9 +2,9 @@
 //!
 //! Provides [`ModuleUiEntry`] — a snapshot of one module's metadata for the
 //! sidebar — and [`build_ui_entries`] to construct the list from the umbrella
-//! params.
+//! params and the live chain modules.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use nih_plug::prelude::Params;
@@ -15,7 +15,8 @@ use crate::AkiFxParams;
 pub struct ModuleUiEntry {
     /// Human-readable module name (must match the module's `AkiFxModule::name()` return value).
     pub name: &'static str,
-    /// Latency introduced by this module in samples (static snapshot).
+    /// Latency introduced by this module in samples, read live from the
+    /// module at editor creation.
     pub latency_samples: u64,
     /// Shared bypass flag — the same `Arc<AtomicBool>` the audio module reads.
     pub bypass: Arc<AtomicBool>,
@@ -25,34 +26,6 @@ pub struct ModuleUiEntry {
     pub params: Arc<dyn Params>,
 }
 
-// ── Latency lookup ──────────────────────────────────────────────────────────
-
-/// Static latency per module index, matching `create_default_chain` push order.
-/// Only PubertySimulator (index 13) introduces latency (2048 samples).
-const LATENCY_BY_INDEX: [u64; 21] = [
-    0,    // 0  sine_gen
-    0,    // 1  midi_inverter
-    0,    // 2  poly_mod_synth
-    0,    // 3  playground
-    0,    // 4  soft_vacuum
-    0,    // 5  crisp
-    0,    // 6  spectral_gate
-    0,    // 7  frequency_shift
-    0,    // 8  frequency_magnet
-    0,    // 9  bin_scrambler
-    0,    // 10 morph
-    0,    // 11 phase_lock
-    0,    // 12 sinusoidal_shaped_filter
-    2048, // 13 puberty_simulator
-    0,    // 14 crossover
-    0,    // 15 diopser
-    0,    // 16 loudness_war_winner
-    0,    // 17 spectral_compressor
-    0,    // 18 buffr_glitch
-    0,    // 19 gain
-    0,    // 20 safety_limiter
-];
-
 // ── build_ui_entries ────────────────────────────────────────────────────────
 
 /// Build one [`ModuleUiEntry`] per module, in the same order `create_default_chain` pushes them.
@@ -60,16 +33,24 @@ const LATENCY_BY_INDEX: [u64; 21] = [
 /// Each entry gets:
 /// - a fresh `Arc<AtomicBool>` bypass flag (wired to the module during chain construction)
 /// - a clone of the concrete params `Arc` upcast to `Arc<dyn Params>`
-/// - the static latency snapshot
+/// - the module's current latency (`latency_samples()`), so latency badges
+///   reflect reality. (A previous hand-maintained static table claimed only
+///   Puberty Simulator had latency, under-reporting by ~10×2048 samples.)
 ///
 /// The returned `Vec` always has exactly 21 elements.
-pub fn build_ui_entries(params: &AkiFxParams) -> Vec<ModuleUiEntry> {
+pub fn build_ui_entries(
+    params: &AkiFxParams,
+    modules: &[Box<dyn crate::modules::AkiFxModule>],
+) -> Vec<ModuleUiEntry> {
     // Macro: create one entry per module. Names MUST match create_default_chain order.
     macro_rules! entry {
-        ($field:ident, $name:expr, $id_prefix:expr) => {{
+        ($idx:expr, $field:ident, $name:expr, $id_prefix:expr) => {{
             ModuleUiEntry {
                 name: $name,
-                latency_samples: 0, // filled below
+                latency_samples: modules
+                    .get($idx)
+                    .map(|m| m.latency_samples())
+                    .unwrap_or(0),
                 bypass: Arc::new(AtomicBool::new(true)),
                 id_prefix: $id_prefix,
                 params: params.$field.clone() as Arc<dyn Params>,
@@ -77,34 +58,29 @@ pub fn build_ui_entries(params: &AkiFxParams) -> Vec<ModuleUiEntry> {
         }};
     }
 
-    let mut entries = vec![
-        entry!(sine_gen,              "Sine Generator",          "sine_gen"),
-        entry!(midi_inverter,         "MIDI Inverter",           "midi_inverter"),
-        entry!(poly_mod_synth,        "Poly Mod Synth",          "poly_mod_synth"),
-        entry!(playground,            "Playground",              "playground"),
-        entry!(soft_vacuum,           "Soft Vacuum",             "soft_vacuum"),
-        entry!(crisp,                 "Crisp",                   "crisp"),
-        entry!(spectral_gate,         "Spectral Gate",           "spectral_gate"),
-        entry!(frequency_shift,       "Frequency Shift",         "frequency_shift"),
-        entry!(frequency_magnet,      "Frequency Magnet",        "frequency_magnet"),
-        entry!(bin_scrambler,         "Bin Scrambler",           "bin_scrambler"),
-        entry!(morph,                 "Morph",                   "morph"),
-        entry!(phase_lock,            "Phase Lock",              "phase_lock"),
-        entry!(sinusoidal_shaped_filter, "Sinusoidal Shaped Filter", "sinusoidal_shaped_filter"),
-        entry!(puberty_simulator,     "Puberty Simulator",       "puberty_simulator"),
-        entry!(crossover,             "Crossover",               "crossover"),
-        entry!(diopser,               "Diopser",                 "diopser"),
-        entry!(loudness_war_winner,   "Loudness War Winner",     "loudness_war_winner"),
-        entry!(spectral_compressor,   "Spectral Compressor",     "spectral_compressor"),
-        entry!(buffr_glitch,          "Buffr Glitch",            "buffr_glitch"),
-        entry!(gain,                  "Gain",                    "gain"),
-        entry!(safety_limiter,        "Safety Limiter",          "safety_limiter"),
+    let entries = vec![
+        entry!(0, sine_gen,              "Sine Generator",          "sine_gen"),
+        entry!(1, midi_inverter,         "MIDI Inverter",           "midi_inverter"),
+        entry!(2, poly_mod_synth,        "Poly Mod Synth",          "poly_mod_synth"),
+        entry!(3, playground,            "Playground",              "playground"),
+        entry!(4, soft_vacuum,           "Soft Vacuum",             "soft_vacuum"),
+        entry!(5, crisp,                 "Crisp",                   "crisp"),
+        entry!(6, spectral_gate,         "Spectral Gate",           "spectral_gate"),
+        entry!(7, frequency_shift,       "Frequency Shift",         "frequency_shift"),
+        entry!(8, frequency_magnet,      "Frequency Magnet",        "frequency_magnet"),
+        entry!(9, bin_scrambler,         "Bin Scrambler",           "bin_scrambler"),
+        entry!(10, morph,                "Morph",                   "morph"),
+        entry!(11, phase_lock,           "Phase Lock",              "phase_lock"),
+        entry!(12, sinusoidal_shaped_filter, "Sinusoidal Shaped Filter", "sinusoidal_shaped_filter"),
+        entry!(13, puberty_simulator,    "Puberty Simulator",       "puberty_simulator"),
+        entry!(14, crossover,            "Crossover",               "crossover"),
+        entry!(15, diopser,              "Diopser",                 "diopser"),
+        entry!(16, loudness_war_winner,  "Loudness War Winner",     "loudness_war_winner"),
+        entry!(17, spectral_compressor,  "Spectral Compressor",     "spectral_compressor"),
+        entry!(18, buffr_glitch,         "Buffr Glitch",            "buffr_glitch"),
+        entry!(19, gain,                 "Gain",                    "gain"),
+        entry!(20, safety_limiter,       "Safety Limiter",          "safety_limiter"),
     ];
-
-    // Fill in static latency values.
-    for (i, entry) in entries.iter_mut().enumerate() {
-        entry.latency_samples = LATENCY_BY_INDEX[i];
-    }
 
     entries
 }
@@ -136,6 +112,20 @@ pub fn wire_bypass_flags(
     }
 }
 
+/// Mirror the entries' live bypass flags into the persisted `module_enabled`
+/// state so the host saves which modules were lit. Call after every GUI
+/// power toggle. The audio thread never touches this state — only the GUI
+/// (writes) and nih-plug's state serialization (reads) do.
+pub fn sync_persisted_enabled(params: &AkiFxParams, entries: &[ModuleUiEntry]) {
+    let mut enabled = params.module_enabled.lock();
+    enabled.clear();
+    enabled.extend(
+        entries
+            .iter()
+            .map(|e| !e.bypass.load(Ordering::Relaxed)),
+    );
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -144,8 +134,9 @@ mod tests {
 
     #[test]
     fn build_ui_entries_returns_21_with_correct_names() {
-        let params = AkiFxParams::default();
-        let entries = build_ui_entries(&params);
+        let params = Arc::new(AkiFxParams::default());
+        let chain = crate::create_default_chain(&params);
+        let entries = build_ui_entries(&params, chain.modules());
 
         assert_eq!(entries.len(), 21, "Expected exactly 21 UI entries");
 
@@ -183,24 +174,35 @@ mod tests {
     }
 
     #[test]
-    fn build_ui_entries_latency_matches_expected() {
-        let params = AkiFxParams::default();
-        let entries = build_ui_entries(&params);
+    fn build_ui_entries_latency_matches_live_modules() {
+        let params = Arc::new(AkiFxParams::default());
+        let mut chain = crate::create_default_chain(&params);
+        chain.initialize_all(44100.0, 512);
+        let entries = build_ui_entries(&params, chain.modules());
 
-        // Only Puberty Simulator (index 13) has latency
+        // Latencies must mirror the live modules (no static table anymore).
         for (i, entry) in entries.iter().enumerate() {
-            if i == 13 {
-                assert_eq!(entry.latency_samples, 2048);
-            } else {
-                assert_eq!(entry.latency_samples, 0, "Entry {i} ({}) should have 0 latency", entry.name);
-            }
+            assert_eq!(
+                entry.latency_samples,
+                chain.modules()[i].latency_samples(),
+                "Entry {i} ({}) latency must match the live module",
+                entry.name
+            );
         }
+        // Sanity: with all engines built, the spectral modules report their
+        // engine latency (2048), while Puberty Simulator defaults to a
+        // smaller 1024-sample window.
+        assert_eq!(entries[6].latency_samples, 2048, "Spectral Gate");
+        assert_eq!(entries[13].latency_samples, 1024, "Puberty Simulator");
+        assert_eq!(entries[17].latency_samples, 2048, "Spectral Compressor");
+        assert_eq!(entries[19].latency_samples, 0, "Gain");
     }
 
     #[test]
     fn build_ui_entries_id_prefixes_match_field_names() {
-        let params = AkiFxParams::default();
-        let entries = build_ui_entries(&params);
+        let params = Arc::new(AkiFxParams::default());
+        let chain = crate::create_default_chain(&params);
+        let entries = build_ui_entries(&params, chain.modules());
 
         let expected_prefixes = [
             "sine_gen", "midi_inverter", "poly_mod_synth", "playground",
@@ -230,7 +232,7 @@ mod tests {
     fn wire_bypass_flags_shares_module_flags_end_to_end() {
         let params = Arc::new(crate::AkiFxParams::default());
         let chain = crate::create_default_chain(&params);
-        let mut entries = build_ui_entries(&params);
+        let mut entries = build_ui_entries(&params, chain.modules());
 
         // ── Pre-wiring: entry and module flags are DIFFERENT Arcs ──────
         assert!(
@@ -271,5 +273,33 @@ mod tests {
             chain.modules()[19].is_bypassed(),
             "GUI toggle to bypassed must gate audio-thread processing"
         );
+    }
+
+    /// Persisted enabled state must mirror the entries' bypass flags, so a
+    /// saved session restores which modules were lit.
+    #[test]
+    fn sync_persisted_enabled_mirrors_bypass_flags() {
+        let params = Arc::new(AkiFxParams::default());
+        let chain = crate::create_default_chain(&params);
+        let mut entries = build_ui_entries(&params, chain.modules());
+        wire_bypass_flags(&mut entries, chain.modules());
+
+        // All off by default.
+        sync_persisted_enabled(&params, &entries);
+        assert_eq!(
+            *params.module_enabled.lock(),
+            vec![false; 21],
+            "all modules start bypassed"
+        );
+
+        // Light two modules → persisted state flips those entries.
+        entries[19].bypass.store(false, Ordering::Relaxed); // Gain
+        entries[20].bypass.store(false, Ordering::Relaxed); // Safety Limiter
+        sync_persisted_enabled(&params, &entries);
+        let enabled = params.module_enabled.lock();
+        assert_eq!(enabled.len(), 21);
+        assert!(!enabled[0], "untoggled module stays off");
+        assert!(enabled[19], "Gain should be persisted as enabled");
+        assert!(enabled[20], "Safety Limiter should be persisted as enabled");
     }
 }

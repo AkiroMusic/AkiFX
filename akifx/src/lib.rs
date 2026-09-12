@@ -33,7 +33,6 @@ use modules::safety_limiter::{SafetyLimiterModule, SafetyLimiterParams};
 use modules::sine_gen::{SineGenModule, SineGenParams};
 use modules::sinusoidal_shaped_filter::{SinusoidalShapedFilterModule, SinusoidalShapedFilterParams};
 use modules::soft_vacuum::{SoftVacuumModule, SoftVacuumParams};
-use modules::spectral_compressor::compressor_bank::CompressorBank;
 use modules::spectral_compressor::{SpectralCompressorModule, SpectralCompressorParams};
 use modules::spectral_gate::{SpectralGateModule, SpectralGateParams};
 
@@ -133,6 +132,13 @@ pub struct AkiFxParams {
     /// Persisted UI zoom level. 1.0 = 100% (identity PPT).
     #[persist = "ui_zoom"]
     pub ui_zoom: parking_lot::Mutex<f32>,
+
+    /// Persisted per-module enabled state (`true` = active), in chain order.
+    /// Mirrors each module's bypass flag so a saved session restores which
+    /// modules were lit. Applied to the live flags in `AkiFx::initialize()`.
+    /// Defaults to all-off, matching the chain's all-bypassed initial state.
+    #[persist = "module_enabled"]
+    pub module_enabled: parking_lot::Mutex<Vec<bool>>,
 }
 
 impl Default for AkiFxParams {
@@ -161,6 +167,7 @@ impl Default for AkiFxParams {
             safety_limiter: Arc::new(SafetyLimiterParams::new()),
             module_order: parking_lot::Mutex::new((0..21).collect()),
             ui_zoom: parking_lot::Mutex::new(1.0),
+            module_enabled: parking_lot::Mutex::new(vec![false; 21]),
         }
     }
 }
@@ -239,6 +246,11 @@ pub struct AkiFx {
     /// per-block heap allocation on the audio thread).
     mono_scratch_l: Vec<f32>,
     mono_scratch_r: Vec<f32>,
+    /// The latency value last reported to the host, so `process()` can
+    /// re-report when toggling modules changes the chain's latency (DAWs
+    /// compensate delay based on this — reporting it only in `initialize()`
+    /// left the host with a stale value).
+    reported_latency: u32,
 }
 
 impl Default for AkiFx {
@@ -250,6 +262,7 @@ impl Default for AkiFx {
             chain,
             mono_scratch_l: Vec::new(),
             mono_scratch_r: Vec::new(),
+            reported_latency: 0,
         }
     }
 }
@@ -291,7 +304,9 @@ impl Plugin for AkiFx {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let mut entries = gui::state::build_ui_entries(&self.params);
+        // Latencies are read from the live modules (which `initialize()` has
+        // already configured) instead of a hand-maintained static table.
+        let mut entries = gui::state::build_ui_entries(&self.params, self.chain.modules());
         // CRITICAL: share the live modules' bypass flags with the GUI so rack
         // power toggles actually gate audio processing (Oracle-found bug:
         // build_ui_entries otherwise creates orphan flags).
@@ -319,7 +334,22 @@ impl Plugin for AkiFx {
         }
         // Invalid or missing order leaves the chain at identity (set in new()).
 
-        context.set_latency_samples(self.chain.latency_samples() as u32);
+        // Apply the persisted per-module enabled state (all-off on a fresh
+        // load). nih-plug deserializes state before calling initialize(), so
+        // this runs after a state restore as well.
+        let enabled = self.params.module_enabled.lock().clone();
+        if enabled.len() == self.chain.len() {
+            for (module, &is_enabled) in
+                self.chain.modules_mut().iter_mut().zip(enabled.iter())
+            {
+                module
+                    .bypass_flag()
+                    .store(!is_enabled, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        self.reported_latency = self.chain.latency_samples() as u32;
+        context.set_latency_samples(self.reported_latency);
         true
     }
 
@@ -333,19 +363,22 @@ impl Plugin for AkiFx {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Collect MIDI input events for the block.
-        // Since SysExMessage = (), next_event() already returns NoteEvent<()>.
+        // Keep the host's latency report in sync: modules can be toggled or
+        // reconfigured (oversampling, window size) at any time, and DAWs
+        // compensate delay based on this value.
+        let latency = self.chain.latency_samples() as u32;
+        if latency != self.reported_latency {
+            self.reported_latency = latency;
+            context.set_latency_samples(latency);
+        }
+
+        // Collect all MIDI input events for the block and broadcast them to
+        // the chain (each module consumes what it understands). MIDI CC
+        // events used to be dropped here, which made the MIDI Inverter's CC
+        // transformation and Poly Mod Synth's choke handling unreachable.
         let mut note_events = Vec::new();
         while let Some(event) = context.next_event() {
-            match event {
-                NoteEvent::NoteOn { .. }
-                | NoteEvent::NoteOff { .. }
-                | NoteEvent::PolyPressure { .. }
-                | NoteEvent::MidiPitchBend { .. } => {
-                    note_events.push(event);
-                }
-                _ => {}
-            }
+            note_events.push(event);
         }
 
         // nih-plug Buffer::as_slice() returns &mut [&mut [f32]] — one slice per channel,
