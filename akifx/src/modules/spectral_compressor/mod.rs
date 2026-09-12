@@ -557,9 +557,11 @@ impl SpectralCompressorModule {
             return;
         }
         self.window.resize(window_size, 0.0);
-        let n = window_size;
-        for i in 0..window_size {
-            self.window[i] = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos());
+        // Symmetric Hann — matches nih_plug's util::window::hann_window.
+        let scale = (window_size as f32 - 1.0).recip() * std::f32::consts::TAU;
+        for (i, sample) in self.window.iter_mut().enumerate() {
+            let cos = (i as f32 * scale).cos();
+            *sample = 0.5 - (0.5 * cos);
         }
         self.cached_window_size = window_size;
     }
@@ -582,6 +584,7 @@ impl SpectralCompressorModule {
         window_size: usize,
         overlap_times: usize,
         output_gain: f32,
+        first_non_dc_bin: usize,
     ) {
         let plan_idx = window_size.trailing_zeros() as usize - MIN_WINDOW_ORDER;
         // Plans are normally built by `ensure_plans()`; skip the frame
@@ -622,7 +625,7 @@ impl SpectralCompressorModule {
             chan_idx,
             &self.params,
             overlap_times,
-            1, // first_non_dc_bin
+            first_non_dc_bin,
         );
 
         // Inverse FFT
@@ -690,6 +693,14 @@ impl AkiFxModule for SpectralCompressorModule {
         // Recompute compressor curves if any curve parameter changed.
         self.flag_curve_param_changes();
 
+        // Bin index of the first non-DC/sub-20 Hz bin, exactly like upstream:
+        // upward compression skips bins below ~20 Hz to avoid amplifying
+        // DC leakage (the previous port hardcoded 1, which compressed the
+        // sub-20 Hz bins at window sizes >= 8192).
+        let num_bins = window_size / 2 + 1;
+        let first_non_dc_bin =
+            (20.0 / ((self.sample_rate / 2.0) / num_bins as f32)).floor() as usize + 1;
+
         // Handle runtime window size changes
         if self.cached_window_size != window_size {
             self.ensure_window(window_size);
@@ -751,6 +762,7 @@ impl AkiFxModule for SpectralCompressorModule {
                         window_size,
                         overlap_times,
                         output_gain,
+                        first_non_dc_bin,
                     );
                 }
                 self.channels[0].pending -= hop_size;
@@ -758,8 +770,17 @@ impl AkiFxModule for SpectralCompressorModule {
             }
         }
 
-        // Mix in dry signal with latency compensation
-        let dry_wet = self.params.global.dry_wet_ratio.smoothed.next();
+        // Mix in dry signal with latency compensation. `next_step` advances
+        // the smoother by the whole block (as if that many samples had
+        // passed), matching upstream's per-sample convergence rate; the old
+        // `next()` advanced one step per block, making Mix automation
+        // converge ~block_size times slower.
+        let dry_wet = self
+            .params
+            .global
+            .dry_wet_ratio
+            .smoothed
+            .next_step(left.len() as u32);
         self.dry_wet_mixer.mix_in_dry(
             left,
             right,

@@ -237,12 +237,16 @@ impl AkiFxModule for SafetyLimiterModule {
             let sample_l = left[i];
             let sample_r = if i < right.len() { right[i] } else { sample_l };
 
-            // Check if either channel is peaking (above threshold)
-            let is_peaking =
-                (sample_l.is_finite() && sample_l.abs() > threshold) ||
-                (sample_r.is_finite() && sample_r.abs() > threshold);
+            // Check if either channel is peaking (above threshold).
+            // Non-finite samples count as peaking: upstream mutes them AND
+            // fires the SOS morse alert (a blown buffer is exactly the
+            // situation the alert exists for).
+            let is_peaking = !sample_l.is_finite()
+                || !sample_r.is_finite()
+                || sample_l.abs() > threshold
+                || sample_r.abs() > threshold;
 
-            // Handle non-finite samples by replacing with silence and triggering peaking
+            // Handle non-finite samples by replacing with silence
             if !sample_l.is_finite() {
                 left[i] = 0.0;
             }

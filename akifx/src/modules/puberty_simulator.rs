@@ -292,12 +292,12 @@ impl PubertySimulatorModule {
             return;
         }
         self.window.resize(window_size, 0.0);
-        // Periodic Hann window (N in denominator) — satisfies the COLA property
-        // for overlap factors that are powers of 2 (2, 4, 8, ...).
-        // Matches nih_plug's util::window::hann_window.
-        let n = window_size as f32;
-        for i in 0..window_size {
-            self.window[i] = 0.5 * (1.0 - (2.0 * f32::consts::PI * i as f32 / n).cos());
+        // Symmetric Hann window — matches nih_plug's util::window::hann_window
+        // (`scale = TAU / (size - 1)`), which the upstream plugin uses.
+        let scale = (window_size as f32 - 1.0).recip() * f32::consts::TAU;
+        for (i, sample) in self.window.iter_mut().enumerate() {
+            let cos = (i as f32 * scale).cos();
+            *sample = 0.5 - (0.5 * cos);
         }
     }
 
@@ -457,6 +457,11 @@ impl AkiFxModule for PubertySimulatorModule {
         let window_size = self.window_size();
         self.ensure_window(window_size);
         self.ensure_channel_buffers(window_size);
+        // Seed the pitch smoother so non-host contexts don't ramp from 0.
+        self.params
+            .pitch_octaves
+            .smoothed
+            .reset(self.params.pitch_octaves.value());
     }
 
     fn reset(&mut self) {
@@ -532,6 +537,13 @@ impl AkiFxModule for PubertySimulatorModule {
 
             // Step 2: If we hit a window boundary, process the frame
             if samples_to_process == samples_until_next_window {
+                // Step the pitch smoother once per FFT frame, exactly like
+                // upstream (which advances it by hop samples on the frame's
+                // first channel). The previous port read the raw value once
+                // per host block, so pitch automation stepped in block-sized
+                // jumps.
+                let smoothed_pitch = self.params.pitch_octaves.smoothed.next_step(hop_size as u32);
+                let frequency_multiplier = 2.0f32.powf(-smoothed_pitch);
                 for chan_idx in 0..2 {
                     self.process_frame(
                         chan_idx,

@@ -902,14 +902,16 @@ fn upwards_soft_knee_coefficients(
 // ── dB conversion helpers ──────────────────────────────────────────────────
 
 /// A floor for dB conversion to avoid -infinity.
-const MINUS_INFINITY_DB: f32 = -200.0;
+const MINUS_INFINITY_DB: f32 = -100.0;
+/// Upstream clamps at this gain before the log (util::MINUS_INFINITY_GAIN).
+const MINUS_INFINITY_GAIN: f32 = 1e-5;
 
 /// Convert linear gain to dB, clamping at MINUS_INFINITY_DB.
 fn gain_to_db_fast_epsilon(gain: f32) -> f32 {
     if gain <= 0.0 {
         MINUS_INFINITY_DB
     } else {
-        20.0 * gain.log10()
+        f32::max(gain, MINUS_INFINITY_GAIN).ln() * (std::f32::consts::LOG10_E * 20.0)
     }
 }
 
