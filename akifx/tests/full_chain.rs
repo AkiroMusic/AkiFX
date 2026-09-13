@@ -180,3 +180,29 @@ fn module_names_match_expected() {
     assert!(names.contains(&"Safety Limiter"), "Missing Safety Limiter");
     assert_eq!(names.len(), 11, "Chain must have exactly 11 modules");
 }
+
+/// The global bypass parameter is the whole-chain gate used by
+/// `AkiFx::process()` (engaged -> the buffer is left untouched, a
+/// bit-identical passthrough by construction). This test pins its parameter
+/// contract: default off, and exposed to the host under a stable id so it is
+/// automatable and persisted.
+#[test]
+fn global_bypass_param_contract() {
+    use nih_plug::prelude::Params;
+
+    let (_chain, params) = build_chain();
+    assert!(
+        !params.global_bypass.value(),
+        "global bypass must default to off (chain active)"
+    );
+
+    let ids: Vec<String> = params
+        .param_map()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+    assert!(
+        ids.contains(&"global_bypass".to_owned()),
+        "global_bypass must be exposed to the host"
+    );
+}

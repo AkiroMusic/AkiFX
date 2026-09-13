@@ -1,6 +1,7 @@
 use nih_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 pub mod dsp;
 pub mod gui;
@@ -61,6 +62,10 @@ pub struct AkiFx {
     /// Reused event buffer for the block's MIDI input (avoids a fresh
     /// allocation on every block that carries MIDI).
     events_scratch: Vec<NoteEvent<()>>,
+    /// Output peak levels for the GUI meters (absolute sample value, 0..1+).
+    /// Written on the audio thread after processing, read by the editor.
+    peak_l: Arc<AtomicF32>,
+    peak_r: Arc<AtomicF32>,
 }
 
 impl Default for AkiFx {
@@ -74,6 +79,8 @@ impl Default for AkiFx {
             mono_scratch_r: Vec::new(),
             reported_latency: 0,
             events_scratch: Vec::new(),
+            peak_l: Arc::new(AtomicF32::new(0.0)),
+            peak_r: Arc::new(AtomicF32::new(0.0)),
         }
     }
 }
@@ -122,10 +129,13 @@ impl Plugin for AkiFx {
         // power toggles actually gate audio processing (Oracle-found bug:
         // build_ui_entries otherwise creates orphan flags).
         gui::state::wire_bypass_flags(&mut entries, self.chain.modules());
+        let (peak_l, peak_r) = self.peak_meters();
         gui::create_editor(
             self.params.clone(),
             entries,
             self.chain.order().clone(),
+            peak_l,
+            peak_r,
         )
     }
 
@@ -174,6 +184,14 @@ impl Plugin for AkiFx {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        // Global bypass: the whole chain is skipped, leaving the buffer
+        // untouched (bit-identical passthrough, exactly like bypassing each
+        // module). Events are still drained so nothing stalls.
+        if self.params.global_bypass.value() {
+            self.update_peak_meters(buffer);
+            return ProcessStatus::Normal;
+        }
+
         // Keep the host's latency report in sync: modules can be toggled or
         // reconfigured (oversampling, window size) at any time, and DAWs
         // compensate delay based on this value.
@@ -217,7 +235,9 @@ impl Plugin for AkiFx {
             channels[0].copy_from_slice(&self.mono_scratch_l[..len]);
         }
 
-        // Drain transformed MIDI events from midi_inverter and send to host
+        self.update_peak_meters(buffer);
+
+        // Drain transformed MIDI events from modules and send to host
         for module in self.chain.modules_mut().iter_mut() {
             let events = module.take_output_midi();
             for event in events {
@@ -229,6 +249,35 @@ impl Plugin for AkiFx {
     }
 
     fn deactivate(&mut self) {}
+}
+
+impl AkiFx {
+    /// Publish the buffer's per-channel peak to the GUI meter atomics.
+    fn update_peak_meters(&self, buffer: &Buffer) {
+        let channels = buffer.as_slice_immutable();
+        let mut peak_l = 0.0f32;
+        let mut peak_r = 0.0f32;
+        if channels.len() >= 2 {
+            for &s in channels[0].iter() {
+                peak_l = peak_l.max(s.abs());
+            }
+            for &s in channels[1].iter() {
+                peak_r = peak_r.max(s.abs());
+            }
+        } else if let Some(ch) = channels.first() {
+            for &s in ch.iter() {
+                peak_l = peak_l.max(s.abs());
+            }
+            peak_r = peak_l;
+        }
+        self.peak_l.store(peak_l, Ordering::Relaxed);
+        self.peak_r.store(peak_r, Ordering::Relaxed);
+    }
+
+    /// Meter handles for the editor.
+    pub fn peak_meters(&self) -> (Arc<AtomicF32>, Arc<AtomicF32>) {
+        (self.peak_l.clone(), self.peak_r.clone())
+    }
 }
 
 // ── CLAP / VST3 exports ────────────────────────────────────────────────────

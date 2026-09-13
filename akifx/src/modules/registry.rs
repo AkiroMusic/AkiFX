@@ -31,6 +31,12 @@ macro_rules! define_modules {
                 pub $field: std::sync::Arc<$params_ty>,
             )*
 
+            /// Global chain bypass. When engaged the whole plugin is a
+            /// bit-identical passthrough (no module runs). Automatable and
+            /// persisted by the host like any parameter.
+            #[id = "global_bypass"]
+            pub global_bypass: nih_plug::prelude::BoolParam,
+
             /// Persisted module processing order. Initialized to identity.
             #[persist = "module_order"]
             pub module_order: parking_lot::Mutex<Vec<usize>>,
@@ -52,6 +58,7 @@ macro_rules! define_modules {
                     $(
                         $field: std::sync::Arc::new(<$params_ty as Default>::default()),
                     )*
+                    global_bypass: nih_plug::prelude::BoolParam::new("Global Bypass", false),
                     module_order: parking_lot::Mutex::new((0..MODULE_COUNT).collect()),
                     ui_zoom: parking_lot::Mutex::new(1.0),
                     module_enabled: parking_lot::Mutex::new(vec![false; MODULE_COUNT]),

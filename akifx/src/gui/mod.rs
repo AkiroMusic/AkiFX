@@ -173,6 +173,9 @@ pub struct EditorState {
     /// Module index (0..entries.len()), NOT position in visual order.
     /// The accent bar follows the module wherever it moves after reorder.
     pub selected: usize,
+    /// Output peak meters shared with the audio thread (absolute value).
+    pub peak_l: Arc<AtomicF32>,
+    pub peak_r: Arc<AtomicF32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +206,8 @@ pub fn create_editor(
     params: Arc<AkiFxParams>,
     entries: Vec<ModuleUiEntry>,
     order: SharedOrder,
+    peak_l: Arc<AtomicF32>,
+    peak_r: Arc<AtomicF32>,
 ) -> Option<Box<dyn Editor>> {
     let egui_state = EguiState::from_size(DEFAULT_SIZE.0, DEFAULT_SIZE.1);
     // Clone the Arc so the update closure can pass it to ResizableWindow.
@@ -215,6 +220,8 @@ pub fn create_editor(
             entries,
             order,
             selected: 0,
+            peak_l,
+            peak_r,
         },
         // build: called once when the editor window is created
         |ctx, _user_state| {
@@ -933,12 +940,72 @@ unsafe fn render_param_widget(ui: &mut egui::Ui, setter: &ParamSetter, param_ptr
             ui.add(ParamSlider::for_param(&**p, setter))
         }
         ParamPtr::BoolParam(p) => {
-            ui.add(ParamSlider::for_param(&**p, setter))
+            // Boolean parameters render as a single toggle button: pressed =
+            // on. (Sliders for on/off values were clumsy to grab and drag.)
+            let param = unsafe { &**p };
+            let value = param.value();
+            let name = param.name();
+            let response = ui
+                .selectable_label(value, format!("{name}: {}", if value { "On" } else { "Off" }))
+                .on_hover_text(name);
+            if response.clicked() {
+                setter.set_parameter(param, !value);
+            }
+            response
         }
         ParamPtr::EnumParam(p) => {
             ui.add(ParamSlider::for_param(&**p, setter))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Peak meters
+// ---------------------------------------------------------------------------
+
+/// Draw a compact L/R peak meter pair. Values are absolute sample peaks read
+/// from the audio thread's atomics; the bars show a linear 0..1 scale with
+/// the numeric dBFS of the current peak.
+fn meter_pair(ui: &mut egui::Ui, state: &EditorState) {
+    let peak_l = state.peak_l.load(Ordering::Relaxed);
+    let peak_r = state.peak_r.load(Ordering::Relaxed);
+
+    let (rect, _resp) = ui.allocate_exact_size(Vec2::new(96.0, 20.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 3.0, theme::CHARCOAL_700_50);
+
+    let to_x = |v: f32| rect.left() + rect.width() * v.clamp(0.0, 1.0);
+    for (i, peak) in [peak_l, peak_r].iter().enumerate() {
+        let y = rect.top() + 2.0 + i as f32 * 9.0;
+        let h = 7.0f32;
+        let track = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 2.0, y),
+            Vec2::new(rect.width() - 4.0, h),
+        );
+        let fill_end = to_x(peak.min(1.0));
+        let color = if *peak > 1.0 { theme::SAND_400 } else { theme::JADE_400 };
+        let fill = egui::Rect::from_min_size(
+            track.min,
+            Vec2::new((fill_end - track.left()).max(0.0), h),
+        );
+        painter.rect_filled(track, 2.0, Color32::BLACK);
+        painter.rect_filled(fill, 2.0, color);
+    }
+    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, theme::CHARCOAL_600), egui::StrokeKind::Inside);
+
+    let db = |v: f32| -> String {
+        if v <= 1.0e-5 {
+            "-\u{221e}".to_owned() // minus infinity
+        } else {
+            format!("{:+.1}", 20.0 * v.log10())
+        }
+    };
+    ui.label(
+        RichText::new(format!("L {} / R {} dBFS", db(peak_l), db(peak_r)))
+            .font(theme::mono(9.0))
+            .color(theme::MIST_400),
+    )
+    .on_hover_text("Output peaks after processing (before Safety Limiter guard).");
 }
 
 // ---------------------------------------------------------------------------
@@ -959,11 +1026,38 @@ fn render_bottom_strip(
             ui.label(theme::section_label("MASTER"));
             ui.add_space(8.0);
 
+            // Global bypass: one button for the whole chain (bit-identical
+            // passthrough, automatable by the host).
+            let bypassed = state.params.global_bypass.value();
+            let bp_btn = ui.add(
+                egui::Button::new(
+                    RichText::new(if bypassed { "GLOBAL BYPASS: ON" } else { "GLOBAL BYPASS: OFF" })
+                        .font(theme::mono(11.0))
+                        .color(if bypassed { theme::SAND_400 } else { theme::MIST_300 }),
+                )
+                .fill(if bypassed { theme::CHARCOAL_700_50 } else { Color32::TRANSPARENT })
+                .stroke(Stroke::new(1.0, theme::CHARCOAL_600)),
+            );
+            if bp_btn
+                .on_hover_text("Bypass the entire chain (bit-identical passthrough). Automatable.")
+                .clicked()
+            {
+                setter.set_parameter(&state.params.global_bypass, !bypassed);
+                ui.ctx().request_repaint();
+            }
+
+            ui.add_space(12.0);
+
             // Master gain slider
             let gain_resp = ui.add(
-                ParamSlider::for_param(&state.params.gain.gain, setter).with_width(200.0),
+                ParamSlider::for_param(&state.params.gain.gain, setter).with_width(180.0),
             );
             gain_resp.on_hover_text("Master output gain");
+
+            ui.add_space(12.0);
+
+            // Stereo output peak meters (fed by the audio thread's atomics).
+            meter_pair(ui, state);
 
             // Right-aligned cluster: live latency, UI zoom cycle, About.
             // (Parent scope — the only interactable zone verified reliable.)
