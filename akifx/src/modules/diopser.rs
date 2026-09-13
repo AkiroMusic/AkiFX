@@ -12,9 +12,9 @@
 //! - **Spread** (`#[id = "spread"]`): Octave offset per stage (−5..5).
 //! - **Spread Style** (`#[id = "spstyl"]`): Octaves or Linear distribution.
 
+use crate::dsp::{Biquad, BiquadCoefficients};
 use crate::modules::AkiFxModule;
 use nih_plug::prelude::*;
-use std::f32::consts;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -37,90 +37,6 @@ pub enum SpreadStyle {
     /// Linear frequency spread — useful for sound design.
     #[id = "linear"]
     Linear,
-}
-
-// ── Biquad (ported from nih-plug filter.rs) ────────────────────────────────
-
-/// Pre-normalized biquad coefficients `[b0, b1, b2, a1, a2]`.
-#[derive(Clone, Copy, Debug)]
-struct BiquadCoefficients {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-}
-
-impl BiquadCoefficients {
-    /// Identity (passthrough) coefficients.
-    fn identity() -> Self {
-        Self {
-            b0: 1.0,
-            b1: 0.0,
-            b2: 0.0,
-            a1: 0.0,
-            a2: 0.0,
-        }
-    }
-
-    /// Compute all-pass filter coefficients.
-    ///
-    /// Based on the Audio EQ Cookbook formula. At the given `frequency`, the
-    /// filter shifts phase by approximately −90° while preserving magnitude.
-    fn allpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        debug_assert!(sample_rate > 0.0);
-        debug_assert!(frequency > 0.0);
-        debug_assert!(frequency < sample_rate / 2.0);
-        debug_assert!(q > 0.0);
-
-        let omega0 = consts::TAU * (frequency / sample_rate);
-        let cos_omega0 = omega0.cos();
-        let alpha = omega0.sin() / (2.0 * q);
-
-        let a0 = 1.0 + alpha;
-        Self {
-            b0: (1.0 - alpha) / a0,
-            b1: (-2.0 * cos_omega0) / a0,
-            b2: (1.0 + alpha) / a0,
-            a1: (-2.0 * cos_omega0) / a0,
-            a2: (1.0 - alpha) / a0,
-        }
-    }
-}
-
-/// Transposed direct-form biquad filter.
-#[derive(Clone, Copy, Debug)]
-struct Biquad {
-    coefficients: BiquadCoefficients,
-    s1: f32,
-    s2: f32,
-}
-
-impl Default for Biquad {
-    fn default() -> Self {
-        Self {
-            coefficients: BiquadCoefficients::identity(),
-            s1: 0.0,
-            s2: 0.0,
-        }
-    }
-}
-
-impl Biquad {
-    /// Process a single sample through the all-pass filter.
-    #[inline]
-    fn process(&mut self, sample: f32) -> f32 {
-        let result = self.coefficients.b0 * sample + self.s1;
-        self.s1 = self.coefficients.b1 * sample - self.coefficients.a1 * result + self.s2;
-        self.s2 = self.coefficients.b2 * sample - self.coefficients.a2 * result;
-        result
-    }
-
-    /// Reset filter state to zero.
-    fn reset(&mut self) {
-        self.s1 = 0.0;
-        self.s2 = 0.0;
-    }
 }
 
 // ── Parameters ─────────────────────────────────────────────────────────────
@@ -147,6 +63,12 @@ pub struct DiopserParams {
     /// How the spread is distributed (Octaves or Linear).
     #[id = "spstyl"]
     pub filter_spread_style: EnumParam<SpreadStyle>,
+}
+
+impl Default for DiopserParams {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiopserParams {
@@ -426,6 +348,7 @@ impl AkiFxModule for DiopserModule {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts;
     use super::*;
     use std::sync::atomic::AtomicBool;
 

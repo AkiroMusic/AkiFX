@@ -25,7 +25,8 @@
 //! (restricted range), matching the C++ `spectral_process` exactly.
 
 use crate::modules::AkiFxModule;
-use crate::stft::{Polar, SpectralConfig, SpectralEngine, WindowType};
+use crate::modules::spectral_common::{SpectralFxCore, SPECTRAL_FFT_SIZE};
+use crate::stft::Polar;
 use nih_plug::prelude::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -33,7 +34,6 @@ use std::sync::Arc;
 // ── Constants ──────────────────────────────────────────────────────────────
 
 /// Default FFT size for the spectral engine.
-const DEFAULT_FFT_SIZE: usize = 2048;
 
 // ── Parameters ─────────────────────────────────────────────────────────────
 
@@ -95,11 +95,8 @@ pub struct FrequencyShiftModule {
     params: Arc<FrequencyShiftParams>,
     bypass: Arc<AtomicBool>,
     sample_rate: f32,
-    engine: Option<SpectralEngine>,
-    fft_size: usize,
     /// Dry signal buffers for mix blending.
-    dry_buf_l: Vec<f32>,
-    dry_buf_r: Vec<f32>,
+    core: SpectralFxCore,
     /// Scratch for the spectral callback (num_bins), so FFT frames don't
     /// allocate on the audio thread.
     scratch_polar: Vec<Polar>,
@@ -112,10 +109,7 @@ impl FrequencyShiftModule {
             params,
             bypass,
             sample_rate: 44100.0,
-            engine: None,
-            fft_size: DEFAULT_FFT_SIZE,
-            dry_buf_l: Vec::new(),
-            dry_buf_r: Vec::new(),
+            core: SpectralFxCore::new(),
             scratch_polar: Vec::new(),
         }
     }
@@ -127,25 +121,11 @@ impl FrequencyShiftModule {
         Self::new(params, bypass)
     }
 
-    /// Rebuild the spectral engine.
-    fn build_engine(&mut self) {
-        let config = SpectralConfig {
-            fft_size: self.fft_size,
-            overlap_count: 4,
-            window: WindowType::Hann,
-        };
-        self.engine = Some(SpectralEngine::new(config, 2));
-        let num_bins = self.fft_size / 2;
+    /// Size the callback scratch to the bin count.
+    fn ensure_scratch(&mut self) {
+        let num_bins = SPECTRAL_FFT_SIZE / 2;
         if self.scratch_polar.len() != num_bins {
             self.scratch_polar = vec![Polar::new(0.0, 0.0); num_bins];
-        }
-    }
-
-    /// Ensure dry buffers are large enough for the current block size.
-    fn ensure_dry_buffers(&mut self, block_size: usize) {
-        if self.dry_buf_l.len() < block_size {
-            self.dry_buf_l.resize(block_size, 0.0);
-            self.dry_buf_r.resize(block_size, 0.0);
         }
     }
 }
@@ -165,40 +145,28 @@ impl AkiFxModule for FrequencyShiftModule {
 
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
-        self.build_engine();
-        self.ensure_dry_buffers(self.fft_size);
+        self.core.build_engine();
+        self.ensure_scratch();
     }
 
     fn reset(&mut self) {
-        if let Some(engine) = &mut self.engine {
-            engine.reset();
-        }
+        self.core.reset();
     }
 
     fn latency_samples(&self) -> u64 {
-        self.engine
-            .as_ref()
-            .map(|e| e.latency_samples() as u64)
-            .unwrap_or(0)
+        self.core.latency_samples()
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        // Ensure engine exists
-        if self.engine.is_none() {
-            self.build_engine();
-        }
-
-        // Ensure dry buffers are large enough
-        self.ensure_dry_buffers(left.len());
-
-        // Save dry signal for wet-only processing (no mix param — always 100% wet)
-        self.dry_buf_l[..left.len()].copy_from_slice(left);
-        self.dry_buf_r[..right.len()].copy_from_slice(right);
+        // Ensure the engine exists even if initialize() was not called
+        // (tests / standalone edge paths).
+        self.core.build_if_missing();
+        self.ensure_scratch();
 
         let shift_hz = self.params.shift.value();
         let scale = self.params.scale.value();
         let sample_rate = self.sample_rate;
-        let fft_size = self.fft_size;
+        let fft_size = SPECTRAL_FFT_SIZE;
         let half_size = fft_size / 2;
 
         // Pre-compute shift parameters (matching recalculateInternalParameters)
@@ -219,22 +187,12 @@ impl AkiFxModule for FrequencyShiftModule {
             ((-bin_shift).max(0) as usize, half_size)
         };
 
-        // Process through spectral engine.
-        // Engine construction is guaranteed during initialize(); skip this
-        // block rather than panicking in the host's audio callback if not.
         let scratch: &mut [Polar] = &mut self.scratch_polar;
-        let Some(engine) = self.engine.as_mut() else {
-            return;
-        };
-        engine.process(
-            &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
-            &mut [left, right],
-            &mut |num_bins, _chan, _overlap, polar| {
-                frequency_shift_callback(
-                    polar, num_bins, bin_shift, shift_start, shift_end, scale, scratch,
-                );
-            },
-        );
+        self.core.process(left, right, &mut |num_bins, _chan, _overlap, polar| {
+            frequency_shift_callback(
+                polar, num_bins, bin_shift, shift_start, shift_end, scale, scratch,
+            );
+        });
     }
 }
 
@@ -294,6 +252,7 @@ fn frequency_shift_callback(
 
 #[cfg(test)]
 mod tests {
+    
     use super::*;
     use crate::stft::Polar;
 
@@ -409,7 +368,7 @@ mod tests {
         // Find peak in output near where the input impulse should appear.
         // The double-Hann STFT spreads an impulse across overlapping frames,
         // so search a window one hop wide around the reported latency.
-        let hop = module.fft_size / 4;
+        let hop = SPECTRAL_FFT_SIZE / 4;
         // True signal delay is fft_size (reported latency minus the
         // conservative hop the C++ plugins add).
         let true_delay = latency - hop;
@@ -660,7 +619,8 @@ mod tests {
         // reported latency.
         assert_eq!(
             module.latency_samples(),
-            (DEFAULT_FFT_SIZE + DEFAULT_FFT_SIZE / 4) as u64,
+            (crate::modules::spectral_common::SPECTRAL_FFT_SIZE
+                + crate::modules::spectral_common::SPECTRAL_FFT_SIZE / 4) as u64,
             "latency should equal FFT size + hop size"
         );
     }

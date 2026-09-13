@@ -186,6 +186,7 @@ pub fn configure_visuals(ctx: &egui::Context) {
 /// panics on unparsable font data inside the host's process — which takes the
 /// whole DAW down — so every asset is validated here and silently skipped if
 /// it is not a font.
+#[cfg(not(test))]
 fn is_font_file(bytes: &[u8]) -> bool {
     // sfnt magic numbers: 0x00010000 (TrueType), 'OTTO' (CFF OpenType),
     // 'true'/'ttcf' (legacy TrueType / collection).

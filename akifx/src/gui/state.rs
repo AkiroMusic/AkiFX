@@ -28,51 +28,36 @@ pub struct ModuleUiEntry {
 
 // ── build_ui_entries ────────────────────────────────────────────────────────
 
-/// Build one [`ModuleUiEntry`] per module, in the same order `create_default_chain` pushes them.
+/// Build one [`ModuleUiEntry`] per module, in registry order (the same order
+/// `create_default_chain` pushes them).
 ///
 /// Each entry gets:
 /// - a fresh `Arc<AtomicBool>` bypass flag (wired to the module during chain construction)
 /// - a clone of the concrete params `Arc` upcast to `Arc<dyn Params>`
 /// - the module's current latency (`latency_samples()`), so latency badges
-///   reflect reality. (A previous hand-maintained static table claimed only
-///   Puberty Simulator had latency, under-reporting by ~10×2048 samples.)
+///   reflect reality
 ///
-/// The returned `Vec` always has exactly 11 elements.
+/// The module set comes from the registry tables — no hand-maintained list
+/// here.
 pub fn build_ui_entries(
     params: &AkiFxParams,
     modules: &[Box<dyn crate::modules::AkiFxModule>],
 ) -> Vec<ModuleUiEntry> {
-    // Macro: create one entry per module. Names MUST match create_default_chain order.
-    macro_rules! entry {
-        ($idx:expr, $field:ident, $name:expr, $id_prefix:expr) => {{
-            ModuleUiEntry {
-                name: $name,
-                latency_samples: modules
-                    .get($idx)
-                    .map(|m| m.latency_samples())
-                    .unwrap_or(0),
-                bypass: Arc::new(AtomicBool::new(true)),
-                id_prefix: $id_prefix,
-                params: params.$field.clone() as Arc<dyn Params>,
-            }
-        }};
-    }
-
-    let entries = vec![
-        entry!(0, sine_gen,              "Sine Generator",          "sine_gen"),
-        entry!(1, soft_vacuum,           "Soft Vacuum",             "soft_vacuum"),
-        entry!(2, crisp,                 "Crisp",                   "crisp"),
-        entry!(3, spectral_gate,         "Spectral Gate",           "spectral_gate"),
-        entry!(4, frequency_shift,       "Frequency Shift",         "frequency_shift"),
-        entry!(5, spectral_compressor,   "Spectral Compressor",     "spectral_compressor"),
-        entry!(6, crossover,             "Crossover",               "crossover"),
-        entry!(7, diopser,               "Diopser",                 "diopser"),
-        entry!(8, buffr_glitch,          "Buffr Glitch",            "buffr_glitch"),
-        entry!(9, gain,                  "Gain",                    "gain"),
-        entry!(10, safety_limiter,       "Safety Limiter",          "safety_limiter"),
-    ];
-
-    entries
+    debug_assert_eq!(
+        params.module_enabled.lock().len(),
+        crate::MODULE_COUNT,
+        "persisted enabled state must cover every module"
+    );
+    (0..crate::MODULE_COUNT)
+        .map(|idx| ModuleUiEntry {
+            name: crate::MODULE_NAMES[idx],
+            latency_samples: modules.get(idx).map(|m| m.latency_samples()).unwrap_or(0),
+            bypass: Arc::new(AtomicBool::new(true)),
+            id_prefix: crate::MODULE_PREFIXES[idx],
+            params: crate::params_for_module(params, idx)
+                .expect("registry tables must cover every module"),
+        })
+        .collect()
 }
 
 /// Wire each UI entry's bypass flag to the corresponding live module's flag.
@@ -130,25 +115,14 @@ mod tests {
 
         assert_eq!(entries.len(), 11, "Expected exactly 11 UI entries");
 
-        let expected_names = [
-            "Sine Generator",
-            "Soft Vacuum",
-            "Crisp",
-            "Spectral Gate",
-            "Frequency Shift",
-            "Spectral Compressor",
-            "Crossover",
-            "Diopser",
-            "Buffr Glitch",
-            "Gain",
-            "Safety Limiter",
-        ];
-
         for (i, entry) in entries.iter().enumerate() {
             assert_eq!(
-                entry.name, expected_names[i],
-                "Entry {i} name mismatch: expected {:?}, got {:?}",
-                expected_names[i], entry.name
+                entry.name, crate::MODULE_NAMES[i],
+                "Entry {i} name must match the registry table"
+            );
+            assert_eq!(
+                entry.id_prefix, crate::MODULE_PREFIXES[i],
+                "Entry {i} id_prefix must match the registry table"
             );
         }
     }
@@ -178,23 +152,11 @@ mod tests {
     }
 
     #[test]
-    fn build_ui_entries_id_prefixes_match_field_names() {
+    fn build_ui_entries_count_matches_registry() {
         let params = Arc::new(AkiFxParams::default());
         let chain = crate::create_default_chain(&params);
         let entries = build_ui_entries(&params, chain.modules());
-
-        let expected_prefixes = [
-            "sine_gen", "soft_vacuum", "crisp", "spectral_gate",
-            "frequency_shift", "spectral_compressor", "crossover", "diopser",
-            "buffr_glitch", "gain", "safety_limiter",
-        ];
-
-        for (i, entry) in entries.iter().enumerate() {
-            assert_eq!(
-                entry.id_prefix, expected_prefixes[i],
-                "Entry {i} id_prefix mismatch"
-            );
-        }
+        assert_eq!(entries.len(), crate::MODULE_COUNT);
     }
 
     /// REGRESSION (Oracle-found): GUI entry bypass flags MUST be the SAME

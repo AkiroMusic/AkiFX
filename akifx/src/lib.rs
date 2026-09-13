@@ -2,6 +2,7 @@ use nih_plug::prelude::*;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+pub mod dsp;
 pub mod gui;
 pub mod modules;
 pub mod stft;
@@ -14,6 +15,7 @@ pub use modules::chain::SharedOrder;
 pub use modules::chain::ModuleChain;
 pub use modules::AkiFxModule;
 
+// Module types and params types referenced by the registry table below.
 use modules::buffr_glitch::{BuffrGlitchModule, BuffrGlitchParams};
 use modules::crisp::{CrispModule, CrispParams};
 use modules::crossover::{CrossoverModule, CrossoverParams};
@@ -26,150 +28,20 @@ use modules::soft_vacuum::{SoftVacuumModule, SoftVacuumParams};
 use modules::spectral_compressor::{SpectralCompressorModule, SpectralCompressorParams};
 use modules::spectral_gate::{SpectralGateModule, SpectralGateParams};
 
-// ── Gain helper (kept for backwards compat) ─────────────────────────────────
-
-/// Apply gain to a buffer of interleaved samples.
-/// This is a pure-Rust helper that can be tested without a host ProcessContext.
-pub fn apply_gain(gain: f32, samples: &mut [f32]) {
-    for sample in samples.iter_mut() {
-        *sample *= gain;
-    }
-}
-
-// ── Umbrella parameter struct ───────────────────────────────────────────────
-
-/// Umbrella parameter struct that composes all 21 module params.
-///
-/// Each module's params are nested with an `id_prefix` so their parameter IDs
-/// are namespaced. The `Arc<XxxParams>` instances are shared: one clone lives
-/// here (for host serialization), the other lives inside the corresponding
-/// module (for DSP access). They point to the same underlying `FloatParam`s,
-/// so host automation changes propagate to the audio thread.
-///
-/// # Processing Order
-///
-/// 1.  sine_gen              — Oscillator source
-/// 2.  soft_vacuum           — Distortion / saturation
-/// 3.  crisp                 — Transient shaper / enhancer
-/// 4.  spectral_gate         — Spectral noise gate
-/// 5.  frequency_shift       — Bin-wise frequency shifting
-/// 6.  spectral_compressor   — Per-bin compressor
-/// 7.  crossover             — Multiband split
-/// 8.  diopser               — Allpass phaser
-/// 9.  buffr_glitch          — Buffer stutter / glitch
-/// 10. gain                  — Master gain
-/// 11. safety_limiter        — Final safety limiter
-#[derive(Params)]
-pub struct AkiFxParams {
-    #[nested(id_prefix = "sine_gen")]
-    pub sine_gen: Arc<SineGenParams>,
-    #[nested(id_prefix = "soft_vacuum")]
-    pub soft_vacuum: Arc<SoftVacuumParams>,
-    #[nested(id_prefix = "crisp")]
-    pub crisp: Arc<CrispParams>,
-    #[nested(id_prefix = "spectral_gate")]
-    pub spectral_gate: Arc<SpectralGateParams>,
-    #[nested(id_prefix = "frequency_shift")]
-    pub frequency_shift: Arc<FrequencyShiftParams>,
-    #[nested(id_prefix = "crossover")]
-    pub crossover: Arc<CrossoverParams>,
-    #[nested(id_prefix = "diopser")]
-    pub diopser: Arc<DiopserParams>,
-    #[nested(id_prefix = "spectral_compressor")]
-    pub spectral_compressor: Arc<SpectralCompressorParams>,
-    #[nested(id_prefix = "buffr_glitch")]
-    pub buffr_glitch: Arc<BuffrGlitchParams>,
-    #[nested(id_prefix = "gain")]
-    pub gain: Arc<GainParams>,
-    #[nested(id_prefix = "safety_limiter")]
-    pub safety_limiter: Arc<SafetyLimiterParams>,
-
-    /// Persisted module processing order. Initialized to identity `[0, 11)`.
-    /// Deserialized by nih-plug via `#[persist]` when the host restores state.
-    #[persist = "module_order"]
-    pub module_order: parking_lot::Mutex<Vec<usize>>,
-
-    /// Persisted UI zoom level. 1.0 = 100% (identity PPT).
-    #[persist = "ui_zoom"]
-    pub ui_zoom: parking_lot::Mutex<f32>,
-
-    /// Persisted per-module enabled state (`true` = active), in chain order.
-    /// Mirrors each module's bypass flag so a saved session restores which
-    /// modules were lit. Applied to the live flags in `AkiFx::initialize()`.
-    /// Defaults to all-off, matching the chain's all-bypassed initial state.
-    #[persist = "module_enabled"]
-    pub module_enabled: parking_lot::Mutex<Vec<bool>>,
-}
-
-impl Default for AkiFxParams {
-    fn default() -> Self {
-        Self {
-            sine_gen: Arc::new(SineGenParams::new(-12.0, 440.0)),
-            soft_vacuum: Arc::new(SoftVacuumParams::default()),
-            crisp: Arc::new(CrispParams::new()),
-            spectral_gate: Arc::new(SpectralGateParams::new()),
-            frequency_shift: Arc::new(FrequencyShiftParams::new()),
-            crossover: Arc::new(CrossoverParams::default()),
-            diopser: Arc::new(DiopserParams::new()),
-            spectral_compressor: Arc::new(SpectralCompressorParams::new()),
-            buffr_glitch: Arc::new(BuffrGlitchParams::default()),
-            gain: Arc::new(GainParams::new(0.0)),
-            safety_limiter: Arc::new(SafetyLimiterParams::new()),
-            module_order: parking_lot::Mutex::new((0..11).collect()),
-            ui_zoom: parking_lot::Mutex::new(1.0),
-            module_enabled: parking_lot::Mutex::new(vec![false; 11]),
-        }
-    }
-}
-
-// ── Default chain constructor ───────────────────────────────────────────────
-
-/// Build the default processing chain with all 11 modules in order.
-///
-/// Each module receives the corresponding `Arc<XxxParams>` from the umbrella,
-/// so host automation changes propagate to the audio thread without extra work.
-///
-/// # Processing Order Rationale
-///
-/// 1. **Source first** (sine_gen): Generate the audio signal before any
-///    effects.
-/// 2. **Distortion** (soft_vacuum, crisp): Shape dynamics and timbre early
-///    to feed downstream spectral effects.
-/// 3. **Spectral effects** (spectral_gate → frequency_shift): Frequency-domain
-///    processing.
-/// 4. **Dynamics** (spectral_compressor): Per-band dynamic control after
-///    tonal shaping.
-/// 5. **Multiband + phaser** (crossover, diopser): Time-domain processing
-///    that benefits from spectrally-shaped input.
-/// 6. **Glitch** (buffr_glitch): Buffer-based stutter effects late in chain
-///    to capture the fully processed signal.
-/// 7. **Master** (gain, safety_limiter): Final gain stage and brickwall
-///    limiter to protect the output.
-pub fn create_default_chain(params: &AkiFxParams) -> ModuleChain {
-    let mut chain = ModuleChain::new();
-
-    // Helper macro to push a module with its shared params and a fresh bypass flag.
-    macro_rules! push {
-        ($module:ident, $params:expr) => {{
-            let bypass = Arc::new(std::sync::atomic::AtomicBool::new(true));
-            chain.push(Box::new($module::new($params.clone(), bypass)));
-        }};
-    }
-
-    push!(SineGenModule, params.sine_gen);
-    push!(SoftVacuumModule, params.soft_vacuum);
-    push!(CrispModule, params.crisp);
-    push!(SpectralGateModule, params.spectral_gate);
-    push!(FrequencyShiftModule, params.frequency_shift);
-    push!(SpectralCompressorModule, params.spectral_compressor);
-    push!(CrossoverModule, params.crossover);
-    push!(DiopserModule, params.diopser);
-    push!(BuffrGlitchModule, params.buffr_glitch);
-    push!(GainModule, params.gain);
-    push!(SafetyLimiterModule, params.safety_limiter);
-
-    assert_eq!(chain.len(), 11, "Chain must contain exactly 11 modules");
-    chain
+// The single declarative module table. Everything else (parameter tree,
+// chain construction, GUI entries, name/prefix tables) is generated from it.
+crate::define_modules! {
+    sine_gen,            SineGenModule,            SineGenParams,            "sine_gen",            "Sine Generator";
+    soft_vacuum,         SoftVacuumModule,         SoftVacuumParams,         "soft_vacuum",         "Soft Vacuum";
+    crisp,               CrispModule,              CrispParams,              "crisp",               "Crisp";
+    spectral_gate,       SpectralGateModule,       SpectralGateParams,       "spectral_gate",       "Spectral Gate";
+    frequency_shift,     FrequencyShiftModule,     FrequencyShiftParams,     "frequency_shift",     "Frequency Shift";
+    spectral_compressor, SpectralCompressorModule, SpectralCompressorParams, "spectral_compressor", "Spectral Compressor";
+    crossover,           CrossoverModule,          CrossoverParams,          "crossover",           "Crossover";
+    diopser,             DiopserModule,            DiopserParams,            "diopser",             "Diopser";
+    buffr_glitch,        BuffrGlitchModule,        BuffrGlitchParams,        "buffr_glitch",        "Buffr Glitch";
+    gain,                GainModule,               GainParams,               "gain",                "Gain";
+    safety_limiter,      SafetyLimiterModule,      SafetyLimiterParams,      "safety_limiter",      "Safety Limiter";
 }
 
 // ── Plugin struct ───────────────────────────────────────────────────────────
@@ -400,4 +272,37 @@ fn is_valid_permutation(order: &[usize], len: usize) -> bool {
         seen[idx] = true;
     }
     true
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    /// The static tables and the live chain must agree on the module set.
+    #[test]
+    fn registry_tables_match_chain() {
+        let params = AkiFxParams::default();
+        let chain = create_default_chain(&params);
+
+        assert_eq!(MODULE_COUNT, 11);
+        assert_eq!(MODULE_NAMES.len(), MODULE_COUNT);
+        assert_eq!(MODULE_PREFIXES.len(), MODULE_COUNT);
+        assert_eq!(chain.len(), MODULE_COUNT);
+        for (i, module) in chain.modules().iter().enumerate() {
+            assert_eq!(module.name(), MODULE_NAMES[i], "module {i} name");
+        }
+    }
+
+    /// Typed parameter access by index resolves every module.
+    #[test]
+    fn params_for_module_covers_all() {
+        let params = AkiFxParams::default();
+        for idx in 0..MODULE_COUNT {
+            assert!(
+                params_for_module(&params, idx).is_some(),
+                "params_for_module({idx}) must resolve"
+            );
+        }
+        assert!(params_for_module(&params, MODULE_COUNT).is_none());
+    }
 }

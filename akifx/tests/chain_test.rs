@@ -363,12 +363,27 @@ fn gain_module_bypass_via_chain() {
 }
 
 #[test]
-fn existing_passthrough_tests_still_compile_and_run() {
-    // This test simply verifies the apply_gain function from lib.rs still works
-    let mut samples = vec![1.0, 0.5, -0.5];
-    akifx::apply_gain(2.0, &mut samples);
-    let expected = vec![2.0, 1.0, -1.0];
-    for (actual, exp) in samples.iter().zip(expected.iter()) {
+fn gain_module_doubles_amplitude() {
+    let params = Arc::new(akifx::modules::gain::GainParams::new(
+        20.0 * 2.0f32.log10(),
+    ));
+    let bypass = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut module = akifx::modules::gain::GainModule::new(params, bypass);
+    module.initialize(44100.0, 512);
+
+    let mut left: Vec<f32> = vec![0.25, -0.5, 0.75, -1.0];
+    let mut right: Vec<f32> = vec![0.25, -0.5, 0.75, -1.0];
+    module.process(&mut left, &mut right);
+
+    let expected: Vec<f32> = vec![0.5, -1.0, 1.5, -2.0];
+    for (actual, exp) in left.iter().zip(&expected) {
+        let exp: f32 = *exp;
+        let actual: f32 = *actual;
+        assert!((actual - exp).abs() < 1e-6, "Expected {exp}, got {actual}");
+    }
+    for (actual, exp) in right.iter().zip(&expected) {
+        let exp: f32 = *exp;
+        let actual: f32 = *actual;
         assert!((actual - exp).abs() < 1e-6, "Expected {exp}, got {actual}");
     }
 }

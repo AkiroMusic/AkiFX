@@ -34,13 +34,10 @@
 //!
 //! # Linear-Phase Variant
 //!
-//! The FIR linear-phase crossover from the original plugin is stubbed as
-//! future work. The `CrossoverType` enum has a variant for it, but
-//! processing currently only implements the IIR path.
 
+use crate::dsp::{Biquad, BiquadCoefficients};
 use crate::modules::AkiFxModule;
 use nih_plug::prelude::*;
-use std::f32::consts;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -57,140 +54,6 @@ const MAX_CROSSOVER_FREQUENCY: f32 = 20_000.0;
 
 /// Butterworth Q for LR24 crossovers (Q = 1/√2).
 const NEUTRAL_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
-
-// ── Biquad filter (ported from nih-plug crossover/iir/biquad.rs) ─────────────
-
-/// Pre-normalized biquad coefficients `[b0, b1, b2, a1, a2]`.
-///
-/// Based on the Audio EQ Cookbook transposed direct form.
-#[derive(Clone, Copy, Debug)]
-struct BiquadCoefficients {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-}
-
-impl BiquadCoefficients {
-    /// Identity: passes signal through unchanged.
-    fn identity() -> Self {
-        Self {
-            b0: 1.0,
-            b1: 0.0,
-            b2: 0.0,
-            a1: 0.0,
-            a2: 0.0,
-        }
-    }
-
-    /// Clamp inputs into a range where the RBJ coefficient formulas are
-    /// well-defined. The crossover-frequency parameters top out at 20 kHz,
-    /// so hosts running at or below 40 kHz can push automated values past
-    /// Nyquist; clamping keeps the audio thread panic-free (the previous
-    /// `assert!`s were reachable in release builds).
-    fn sanitize(sample_rate: f32, frequency: f32, q: f32) -> (f32, f32, f32) {
-        let sample_rate = sample_rate.max(1.0);
-        let frequency = frequency.clamp(1.0, sample_rate * 0.45);
-        let q = q.max(1.0e-4);
-        (sample_rate, frequency, q)
-    }
-
-    /// Compute coefficients for a 2nd-order low-pass filter.
-    ///
-    /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
-    fn lowpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        let (sample_rate, frequency, q) = Self::sanitize(sample_rate, frequency, q);
-
-        let omega0 = consts::TAU * (frequency / sample_rate);
-        let cos_omega0 = omega0.cos();
-        let alpha = omega0.sin() / (2.0 * q);
-
-        let a0 = 1.0 + alpha;
-        Self {
-            b0: ((1.0 - cos_omega0) / 2.0) / a0,
-            b1: (1.0 - cos_omega0) / a0,
-            b2: ((1.0 - cos_omega0) / 2.0) / a0,
-            a1: (-2.0 * cos_omega0) / a0,
-            a2: (1.0 - alpha) / a0,
-        }
-    }
-
-    /// Compute coefficients for a 2nd-order high-pass filter.
-    ///
-    /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
-    fn highpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        let (sample_rate, frequency, q) = Self::sanitize(sample_rate, frequency, q);
-
-        let omega0 = consts::TAU * (frequency / sample_rate);
-        let cos_omega0 = omega0.cos();
-        let alpha = omega0.sin() / (2.0 * q);
-
-        let a0 = 1.0 + alpha;
-        Self {
-            b0: ((1.0 + cos_omega0) / 2.0) / a0,
-            b1: -(1.0 + cos_omega0) / a0,
-            b2: ((1.0 + cos_omega0) / 2.0) / a0,
-            a1: (-2.0 * cos_omega0) / a0,
-            a2: (1.0 - alpha) / a0,
-        }
-    }
-
-    /// Compute coefficients for a 2nd-order all-pass filter.
-    ///
-    /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
-    fn allpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        let (sample_rate, frequency, q) = Self::sanitize(sample_rate, frequency, q);
-
-        let omega0 = consts::TAU * (frequency / sample_rate);
-        let cos_omega0 = omega0.cos();
-        let alpha = omega0.sin() / (2.0 * q);
-
-        let a0 = 1.0 + alpha;
-        Self {
-            b0: (1.0 - alpha) / a0,
-            b1: (-2.0 * cos_omega0) / a0,
-            b2: (1.0 + alpha) / a0,
-            a1: (-2.0 * cos_omega0) / a0,
-            a2: (1.0 - alpha) / a0,
-        }
-    }
-}
-
-/// Transposed direct-form biquad filter.
-///
-/// Processes one scalar sample at a time (no SIMD — AkiFx processes L/R
-/// independently via `process(left, right)`).
-#[derive(Clone, Copy, Debug)]
-struct Biquad {
-    coefficients: BiquadCoefficients,
-    s1: f32,
-    s2: f32,
-}
-
-impl Default for Biquad {
-    fn default() -> Self {
-        Self {
-            coefficients: BiquadCoefficients::identity(),
-            s1: 0.0,
-            s2: 0.0,
-        }
-    }
-}
-
-impl Biquad {
-    fn process(&mut self, sample: f32) -> f32 {
-        let result = self.coefficients.b0 * sample + self.s1;
-        self.s1 = self.coefficients.b1 * sample - self.coefficients.a1 * result + self.s2;
-        self.s2 = self.coefficients.b2 * sample - self.coefficients.a2 * result;
-        result
-    }
-
-    fn reset(&mut self) {
-        self.s1 = 0.0;
-        self.s2 = 0.0;
-    }
-}
 
 // ── Single crossover (LR24) ─────────────────────────────────────────────────
 
@@ -368,21 +231,6 @@ impl IirCrossover {
 
 // ── Parameters ───────────────────────────────────────────────────────────────
 
-/// Crossover filter type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
-pub enum CrossoverType {
-    /// IIR Linkwitz-Riley 24 dB/octave. Zero-latency, minimum-phase.
-    #[id = "lr24"]
-    #[name = "LR24"]
-    LinkwitzRiley24,
-
-    /// FIR linear-phase LR24. Phase-coherent but introduces latency.
-    /// **Stubbed as future work** — falls back to IIR path.
-    #[id = "lr24-lp"]
-    #[name = "LR24 (LP)"]
-    LinkwitzRiley24LinearPhase,
-}
-
 /// Parameters for the Crossover module.
 #[derive(Params)]
 pub struct CrossoverParams {
@@ -402,10 +250,6 @@ pub struct CrossoverParams {
     /// Crossover frequency 4 (Hz). Only active when num_bands >= 5.
     #[id = "xov4fq"]
     pub crossover_4_freq: FloatParam,
-
-    /// Crossover filter type (IIR vs linear-phase).
-    #[id = "xovtyp"]
-    pub crossover_type: EnumParam<CrossoverType>,
 
     /// Gain for band 1 (lowest). dB, smoothed.
     #[id = "bg1"]
@@ -461,7 +305,6 @@ impl Default for CrossoverParams {
                 .with_value_to_string(hz_to_string)
                 .with_string_to_value(string_to_hz),
 
-            crossover_type: EnumParam::new("Type", CrossoverType::LinkwitzRiley24),
 
             band_1_gain: FloatParam::new("Band 1 Gain", util::db_to_gain(0.0), band_gain_range)
                 .with_smoother(SmoothingStyle::Logarithmic(50.0))
@@ -745,7 +588,6 @@ mod tests {
                 .with_smoother(crossover_smooth)
                 .with_value_to_string(hz_to_string)
                 .with_string_to_value(string_to_hz),
-            crossover_type: EnumParam::new("Type", CrossoverType::LinkwitzRiley24),
             band_1_gain: band_gain("Band 1", band_gains_db.first().copied().unwrap_or(0.0)),
             band_2_gain: band_gain("Band 2", band_gains_db.get(1).copied().unwrap_or(0.0)),
             band_3_gain: band_gain("Band 3", band_gains_db.get(2).copied().unwrap_or(0.0)),

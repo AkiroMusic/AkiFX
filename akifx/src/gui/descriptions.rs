@@ -122,9 +122,6 @@ pub fn param_tip(id_prefix: &str, param_lower: &str) -> Option<&'static str> {
         ("crossover", "crossover_2_freq") => Some("Crossover point 2 in Hz. Splits mid bands."),
         ("crossover", "crossover_3_freq") => Some("Crossover point 3 in Hz. Splits upper-mid bands."),
         ("crossover", "crossover_4_freq") => Some("Crossover point 4 in Hz. Splits high band."),
-        ("crossover", "crossover_type") => Some(
-            "Filter topology. Linkwitz-Riley 24/48 dB/oct. Affects phase coherence at split points.",
-        ),
         ("crossover", "band_1_gain") => Some("Gain for band 1 (lowest). Boost or cut the bass region."),
         ("crossover", "band_2_gain") => Some("Gain for band 2. Adjust the low-mid level."),
         ("crossover", "band_3_gain") => Some("Gain for band 3. Adjust the mid level."),

@@ -55,7 +55,6 @@ pub struct CompressorBank {
 
     envelopes: Vec<Vec<f32>>,
     envelope_followers_timing_scale: f32,
-    sidechain_spectrum_magnitudes: Vec<Vec<f32>>,
 
     window_size: usize,
     sample_rate: f32,
@@ -80,29 +79,20 @@ pub struct ThresholdParams {
     /// Curvature coefficient.
     #[id = "thresh_curve_curve"]
     pub curve_curve: FloatParam,
-    /// Threshold mode (internal / sidechain matching / sidechain compress).
-    #[id = "thresh_mode"]
-    pub mode: EnumParam<ThresholdMode>,
     /// Sidechain channel linking amount.
     #[id = "thresh_sc_link"]
     pub sc_channel_link: FloatParam,
 }
 
-/// Threshold mode.
+/// Threshold mode. The upstream sidechain variants are not wired in this
+/// integration (no sidechain input is routed), so only the internal
+/// pink-noise mode remains.
 #[derive(Enum, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ThresholdMode {
     /// Internal mode with pink-noise offset.
     #[id = "internal"]
     #[name = "Pink Noise"]
     Internal,
-    /// Sidechain matching mode.
-    #[id = "sidechain"]
-    #[name = "Sidechain Matching"]
-    SidechainMatch,
-    /// Sidechain compression mode.
-    #[id = "sidechain_compress"]
-    #[name = "Sidechain Compression"]
-    SidechainCompress,
 }
 
 // ── CompressorBankParams ───────────────────────────────────────────────────
@@ -205,8 +195,6 @@ impl ThresholdParams {
             .with_unit(" dB/oct\u{00B2}")
             .with_step_size(0.01),
 
-            mode: EnumParam::new("Mode", ThresholdMode::Internal)
-                .with_callback(Arc::new(move |_| set_update_both(0.0))),
             sc_channel_link: FloatParam::new(
                 "SC Channel Link",
                 0.8,
@@ -223,12 +211,7 @@ impl ThresholdParams {
         CurveParams {
             intercept: self.threshold_db.value(),
             center_frequency: self.center_frequency.value(),
-            slope: match self.mode.value() {
-                ThresholdMode::Internal => self.curve_slope.value() - 3.0,
-                ThresholdMode::SidechainMatch | ThresholdMode::SidechainCompress => {
-                    self.curve_slope.value()
-                }
-            },
+            slope: self.curve_slope.value() - 3.0,
             curve: self.curve_curve.value(),
         }
     }
@@ -278,8 +261,6 @@ impl ThresholdParams {
             )
             .with_callback(set_update_both.clone())
             .with_unit(" dB/oct\u{00B2}").with_step_size(0.01),
-            mode: EnumParam::new("Mode", ThresholdMode::Internal)
-                .with_callback(Arc::new(move |_| set_update_both(0.0))),
             sc_channel_link: FloatParam::new(
                 "SC Channel Link", 0.8,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
@@ -505,7 +486,6 @@ impl CompressorBank {
 
             envelopes: vec![Vec::with_capacity(complex_len); num_channels],
             envelope_followers_timing_scale: 0.0,
-            sidechain_spectrum_magnitudes: vec![Vec::with_capacity(complex_len); num_channels],
 
             window_size: 0,
             sample_rate: 1.0,
@@ -538,9 +518,6 @@ impl CompressorBank {
         for envelopes in &mut self.envelopes {
             envelopes.resize(complex_len, ENVELOPE_INIT_VALUE);
         }
-        for mag in &mut self.sidechain_spectrum_magnitudes {
-            mag.resize(complex_len, 0.0);
-        }
 
         self.window_size = window_size;
         self.sample_rate = sample_rate;
@@ -565,9 +542,6 @@ impl CompressorBank {
         for env in &mut self.envelopes {
             env.fill(ENVELOPE_INIT_VALUE);
         }
-        for mag in &mut self.sidechain_spectrum_magnitudes {
-            mag.fill(0.0);
-        }
     }
 
     /// Get a reference to the analyzer data.
@@ -589,15 +563,6 @@ impl CompressorBank {
         self.compress(buffer, channel_idx, params, first_non_dc_bin);
     }
 
-    /// Set sidechain spectrum magnitudes before processing.
-    pub fn process_sidechain(&mut self, sc_buffer: &[Complex32], channel_idx: usize) {
-        for (bin, magnitude) in sc_buffer
-            .iter()
-            .zip(self.sidechain_spectrum_magnitudes[channel_idx].iter_mut())
-        {
-            *magnitude = bin.norm();
-        }
-    }
 
     fn update_envelopes(
         &mut self,

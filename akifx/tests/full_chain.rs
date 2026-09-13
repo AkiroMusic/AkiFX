@@ -107,10 +107,10 @@ fn no_nan_through_active_chain_with_noise() {
     // All modules active with default params (neutral-ish settings)
     let block_size = 512;
     let mut left: Vec<f32> = (0..block_size)
-        .map(|i| ((i as f32 * 0.1).sin() * 0.5 + (i as f32 * 0.037).cos() * 0.3))
+        .map(|i| (i as f32 * 0.1).sin() * 0.5 + (i as f32 * 0.037).cos() * 0.3)
         .collect();
     let mut right: Vec<f32> = (0..block_size)
-        .map(|i| ((i as f32 * 0.13).sin() * 0.4 + (i as f32 * 0.041).cos() * 0.35))
+        .map(|i| (i as f32 * 0.13).sin() * 0.4 + (i as f32 * 0.041).cos() * 0.35)
         .collect();
 
     chain.process(&mut left, &mut right);

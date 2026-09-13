@@ -24,6 +24,12 @@ pub struct GainParams {
     pub gain: FloatParam,
 }
 
+impl Default for GainParams {
+    fn default() -> Self {
+        Self::new(0.0)
+    }
+}
+
 impl GainParams {
     /// Create new gain params with the given default value in dB.
     pub fn new(default_db: f32) -> Self {

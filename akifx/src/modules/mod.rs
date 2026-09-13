@@ -33,6 +33,7 @@
 
 pub mod chain;
 pub mod gain;
+pub mod registry;
 pub mod sine_gen;
 pub mod safety_limiter;
 pub mod crisp;
@@ -42,6 +43,7 @@ pub mod soft_vacuum;
 pub mod crossover;
 pub mod spectral_gate;
 pub mod frequency_shift;
+pub mod spectral_common;
 pub mod spectral_compressor;
 
 pub use chain::ModuleChain;

@@ -30,7 +30,7 @@
 //! Phase is always copied from input (untouched).
 
 use crate::modules::AkiFxModule;
-use crate::stft::{SpectralConfig, SpectralEngine, WindowType};
+use crate::modules::spectral_common::SpectralFxCore;
 use nih_plug::prelude::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -38,7 +38,6 @@ use std::sync::Arc;
 // ── Constants ──────────────────────────────────────────────────────────────
 
 /// Default FFT size for the spectral engine.
-const DEFAULT_FFT_SIZE: usize = 2048;
 
 // ── Parameters ─────────────────────────────────────────────────────────────
 
@@ -122,11 +121,7 @@ pub struct SpectralGateModule {
     bypass: Arc<AtomicBool>,
     #[allow(dead_code)]
     sample_rate: f32,
-    engine: Option<SpectralEngine>,
-    fft_size: usize,
-    /// Dry signal buffers for input to the spectral engine.
-    dry_buf_l: Vec<f32>,
-    dry_buf_r: Vec<f32>,
+    core: SpectralFxCore,
     /// Cached parameter values for change detection.
     cached_cutoff: f32,
     cached_balance: f32,
@@ -144,10 +139,7 @@ impl SpectralGateModule {
             params,
             bypass,
             sample_rate: 44100.0,
-            engine: None,
-            fft_size: DEFAULT_FFT_SIZE,
-            dry_buf_l: Vec::new(),
-            dry_buf_r: Vec::new(),
+            core: SpectralFxCore::new(),
             cached_cutoff: -1.0,
             cached_balance: -1.0,
             gate_high: 0.0,
@@ -190,23 +182,6 @@ impl SpectralGateModule {
         self.balance_weak_scale = (1.0 - balance).powf(4.0);
     }
 
-    /// Rebuild the spectral engine with current parameter values.
-    fn build_engine(&mut self) {
-        let config = SpectralConfig {
-            fft_size: self.fft_size,
-            overlap_count: 4,
-            window: WindowType::Hann,
-        };
-        self.engine = Some(SpectralEngine::new(config, 2));
-    }
-
-    /// Ensure dry buffers are large enough for the current block size.
-    fn ensure_dry_buffers(&mut self, block_size: usize) {
-        if self.dry_buf_l.len() < block_size {
-            self.dry_buf_l.resize(block_size, 0.0);
-            self.dry_buf_r.resize(block_size, 0.0);
-        }
-    }
 }
 
 impl AkiFxModule for SpectralGateModule {
@@ -224,38 +199,20 @@ impl AkiFxModule for SpectralGateModule {
 
     fn initialize(&mut self, sample_rate: f32, _max_block_size: usize) {
         self.sample_rate = sample_rate;
-        self.build_engine();
-        self.ensure_dry_buffers(self.fft_size);
+        self.core.build_engine();
     }
 
     fn reset(&mut self) {
-        if let Some(engine) = &mut self.engine {
-            engine.reset();
-        }
+        self.core.reset();
     }
 
     fn latency_samples(&self) -> u64 {
-        self.engine
-            .as_ref()
-            .map(|e| e.latency_samples() as u64)
-            .unwrap_or(0)
+        self.core.latency_samples()
     }
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         // Recalculate internal params if cutoff or balance changed
         self.recalculate_internal_params();
-
-        // Ensure engine exists
-        if self.engine.is_none() {
-            self.build_engine();
-        }
-
-        // Ensure dry buffers are large enough
-        self.ensure_dry_buffers(left.len());
-
-        // Save dry signal as input to the spectral engine
-        self.dry_buf_l[..left.len()].copy_from_slice(left);
-        self.dry_buf_r[..right.len()].copy_from_slice(right);
 
         // Capture cached parameters for the closure
         let gate_high = self.gate_high;
@@ -265,16 +222,11 @@ impl AkiFxModule for SpectralGateModule {
         let tilt_enabled = self.params.enable_tilt.value();
         let tilt_raw = self.params.tilt.value();
 
-        // Process through spectral engine with gating callback.
-        // Engine construction is guaranteed during initialize(); skip this
-        // block rather than panicking in the host's audio callback if not.
-        let Some(engine) = self.engine.as_mut() else {
-            return;
-        };
-        engine.process(
-            &[&self.dry_buf_l[..left.len()], &self.dry_buf_r[..right.len()]],
-            &mut [left, right],
-            &mut |num_bins, _chan, _overlap, polar| {
+        // Ensure the engine exists even if initialize() was not called
+        // (tests / standalone edge paths).
+        self.core.build_if_missing();
+
+        self.core.process(left, right, &mut |num_bins, _chan, _overlap, polar| {
                 // Faithful port of SpectralGateFFTProcessor::spectral_process
                 // DC bin (0) passes through unchanged
 
@@ -320,6 +272,7 @@ impl AkiFxModule for SpectralGateModule {
 
 #[cfg(test)]
 mod tests {
+    
     use super::*;
 
     const SR: f32 = 44100.0;
@@ -454,7 +407,7 @@ mod tests {
         let latency = module.latency_samples() as usize;
         // True signal delay is fft_size; the reported value adds a
         // conservative hop (matching the C++ plugins).
-        let latency = latency - module.fft_size / 4;
+        let latency = latency - crate::modules::spectral_common::SPECTRAL_FFT_SIZE / 4;
         let peak_pos = output[latency..]
             .iter()
             .enumerate()
@@ -646,7 +599,8 @@ mod tests {
         let module = make_module();
         assert_eq!(
             module.latency_samples(),
-            (DEFAULT_FFT_SIZE + DEFAULT_FFT_SIZE / 4) as u64,
+            (crate::modules::spectral_common::SPECTRAL_FFT_SIZE
+                + crate::modules::spectral_common::SPECTRAL_FFT_SIZE / 4) as u64,
             "latency should equal FFT size + hop size"
         );
     }

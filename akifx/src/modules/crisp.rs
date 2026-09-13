@@ -16,9 +16,9 @@
 //! Mirrors all nih-plug Crisp parameters exactly: amount, mode, stereo mode,
 //! filter frequencies/Q for input LPF, noise HPF/LPF, output gain, wet-only.
 
+use crate::dsp::{Biquad, BiquadCoefficients};
 use crate::modules::AkiFxModule;
 use nih_plug::prelude::*;
-use std::f32::consts;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -86,94 +86,6 @@ impl Pcg32iState {
     }
 }
 
-// ── Biquad Filter (ported from nih-plug filter.rs) ───────────────────────
-// Transposed direct form: <https://en.wikipedia.org/wiki/Digital_biquad_filter#Transposed_direct_forms>
-
-/// Pre-normalized biquad coefficients `[b0, b1, b2, a1, a2]`.
-#[derive(Clone, Copy, Debug)]
-struct BiquadCoefficients {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-}
-
-/// A simple biquad filter for second-order low-pass and high-pass filtering.
-#[derive(Clone, Copy, Debug)]
-struct Biquad {
-    pub coefficients: BiquadCoefficients,
-    s1: f32,
-    s2: f32,
-}
-
-impl Default for Biquad {
-    /// Before setting constants the filter acts as an identity function.
-    fn default() -> Self {
-        Self {
-            coefficients: BiquadCoefficients {
-                b0: 1.0,
-                b1: 0.0,
-                b2: 0.0,
-                a1: 0.0,
-                a2: 0.0,
-            },
-            s1: 0.0,
-            s2: 0.0,
-        }
-    }
-}
-
-impl Biquad {
-    /// Process a single sample.
-    #[inline]
-    fn process(&mut self, sample: f32) -> f32 {
-        let result = self.coefficients.b0 * sample + self.s1;
-        self.s1 = self.coefficients.b1 * sample - self.coefficients.a1 * result + self.s2;
-        self.s2 = self.coefficients.b2 * sample - self.coefficients.a2 * result;
-        result
-    }
-
-    /// Reset the state to zero.
-    fn reset(&mut self) {
-        self.s1 = 0.0;
-        self.s2 = 0.0;
-    }
-}
-
-impl BiquadCoefficients {
-    /// Compute coefficients for a low-pass filter.
-    /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
-    fn lowpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        let omega0 = consts::TAU * (frequency / sample_rate);
-        let cos_omega0 = omega0.cos();
-        let alpha = omega0.sin() / (2.0 * q);
-        let a0 = 1.0 + alpha;
-        Self {
-            b0: ((1.0 - cos_omega0) / 2.0) / a0,
-            b1: (1.0 - cos_omega0) / a0,
-            b2: ((1.0 - cos_omega0) / 2.0) / a0,
-            a1: (-2.0 * cos_omega0) / a0,
-            a2: (1.0 - alpha) / a0,
-        }
-    }
-
-    /// Compute coefficients for a high-pass filter.
-    /// Based on <http://shepazu.github.io/Audio-EQ-Cookbook/audio-eq-cookbook.html>.
-    fn highpass(sample_rate: f32, frequency: f32, q: f32) -> Self {
-        let omega0 = consts::TAU * (frequency / sample_rate);
-        let cos_omega0 = omega0.cos();
-        let alpha = omega0.sin() / (2.0 * q);
-        let a0 = 1.0 + alpha;
-        Self {
-            b0: ((1.0 + cos_omega0) / 2.0) / a0,
-            b1: -(1.0 + cos_omega0) / a0,
-            b2: ((1.0 + cos_omega0) / 2.0) / a0,
-            a1: (-2.0 * cos_omega0) / a0,
-            a2: (1.0 - alpha) / a0,
-        }
-    }
-}
 
 // ── Enums ────────────────────────────────────────────────────────────────
 
@@ -186,10 +98,6 @@ pub enum Mode {
     /// RM only the positive part of the waveform.
     #[id = "crispy"]
     Crispy,
-    /// RM only the negative part of the waveform.
-    #[id = "crispy-negated"]
-    #[name = "Crispy (alt)"]
-    CrispyNegated,
 }
 
 /// Controls how to handle stereo input.
@@ -246,6 +154,12 @@ pub struct CrispParams {
     /// If set, only output the RM'ed signal.
     #[id = "wtonly"]
     pub wet_only: BoolParam,
+}
+
+impl Default for CrispParams {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CrispParams {
@@ -492,12 +406,7 @@ impl CrispModule {
         let sample = self.rm_input_lpf[channel_idx].process(sample);
         match self.params.mode.value() {
             Mode::Soggy => sample * noise,
-            // NOTE: upstream nih-plug uses `max(0.0)` for BOTH crispy modes
-            // (CrispyNegated is literally identical to Crispy there — an
-            // upstream quirk kept for fidelity even though the name suggests
-            // a `min(0.0)` variant).
             Mode::Crispy => sample.max(0.0) * noise,
-            Mode::CrispyNegated => sample.max(0.0) * noise,
         }
     }
 
@@ -685,6 +594,7 @@ impl AkiFxModule for CrispModule {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts;
     use super::*;
 
     const SR: f32 = 44_100.0;

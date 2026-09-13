@@ -32,7 +32,7 @@ pub mod dry_wet_mixer;
 
 use crate::modules::AkiFxModule;
 use compressor_bank::{
-    CompressorBank, CompressorBankParams, ThresholdMode, ThresholdParams,
+    CompressorBank, CompressorBankParams, ThresholdParams,
 };
 use dry_wet_mixer::{DryWetMixer, MixingStyle};
 use nih_plug::prelude::*;
@@ -182,6 +182,12 @@ impl Default for GlobalParams {
             .with_unit(" ms")
             .with_step_size(0.1),
         }
+    }
+}
+
+impl Default for SpectralCompressorParams {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -391,7 +397,6 @@ struct CachedCurveParams {
     center_frequency: f32,
     curve_slope: f32,
     curve_curve: f32,
-    threshold_mode: ThresholdMode,
     dw_threshold_offset: f32,
     up_threshold_offset: f32,
     dw_ratio: f32,
@@ -411,7 +416,6 @@ impl CachedCurveParams {
             center_frequency: threshold.center_frequency.value(),
             curve_slope: threshold.curve_slope.value(),
             curve_curve: threshold.curve_curve.value(),
-            threshold_mode: threshold.mode.value(),
             dw_threshold_offset: compressors.downwards.threshold_offset_db.value(),
             up_threshold_offset: compressors.upwards.threshold_offset_db.value(),
             dw_ratio: compressors.downwards.ratio.value(),
@@ -497,7 +501,6 @@ impl SpectralCompressorModule {
             || previous.center_frequency != current.center_frequency
             || previous.curve_slope != current.curve_slope
             || previous.curve_curve != current.curve_curve
-            || previous.threshold_mode != current.threshold_mode
             || previous.dw_threshold_offset != current.dw_threshold_offset
             || previous.up_threshold_offset != current.up_threshold_offset;
         // Knee coefficients depend on thresholds and ratios too.
@@ -1084,7 +1087,7 @@ mod tests {
 
     #[test]
     fn compressor_bank_affects_module_output() {
-        let mut mod_ref = make_module();
+        let mod_ref = make_module();
         let warmup = mod_ref.window_size() * 4;
         let total = warmup + BLOCK * 4;
         let input: Vec<f32> = (0..total)
