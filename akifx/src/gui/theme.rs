@@ -182,9 +182,23 @@ pub fn configure_visuals(ctx: &egui::Context) {
 // Font loading
 // ---------------------------------------------------------------------------
 
+/// Whether the bytes look like a font epaint can parse (TrueType/OTF). egui
+/// panics on unparsable font data inside the host's process — which takes the
+/// whole DAW down — so every asset is validated here and silently skipped if
+/// it is not a font.
+fn is_font_file(bytes: &[u8]) -> bool {
+    // sfnt magic numbers: 0x00010000 (TrueType), 'OTTO' (CFF OpenType),
+    // 'true'/'ttcf' (legacy TrueType / collection).
+    bytes.starts_with(&[0x00, 0x01, 0x00, 0x00])
+        || bytes.starts_with(b"OTTO")
+        || bytes.starts_with(b"true")
+        || bytes.starts_with(b"ttcf")
+}
+
 /// Load custom fonts: Inter (body), Noto Sans SC (CJK fallback) and
 /// Cormorant Garamond SemiBold (display/heading serif, served by
-/// [`heading`]).
+/// [`heading`]). Files that fail validation are skipped (egui falls back to
+/// its built-in fonts).
 pub fn load_fonts(ctx: &egui::Context) {
     #[allow(unused_mut)]
     let mut fonts = FontDefinitions::default();
@@ -193,34 +207,43 @@ pub fn load_fonts(ctx: &egui::Context) {
     #[cfg(not(test))]
     {
         let inter_regular = include_bytes!("../../assets/fonts/Inter-Regular.ttf");
-        fonts
-            .font_data
-            .insert("inter".to_owned(), FontData::from_static(inter_regular).into());
+        if is_font_file(inter_regular) {
+            fonts
+                .font_data
+                .insert("inter".to_owned(), FontData::from_static(inter_regular).into());
+        }
 
         let inter_medium = include_bytes!("../../assets/fonts/Inter-Medium.ttf");
-        fonts
-            .font_data
-            .insert("inter_medium".to_owned(), FontData::from_static(inter_medium).into());
+        if is_font_file(inter_medium) {
+            fonts.font_data.insert(
+                "inter_medium".to_owned(),
+                FontData::from_static(inter_medium).into(),
+            );
+        }
     }
 
     // ── Cormorant Garamond SemiBold (display serif) ────────────────────
     #[cfg(not(test))]
     {
         let cormorant = include_bytes!("../../assets/fonts/CormorantGaramond-SemiBold.ttf");
-        fonts.font_data.insert(
-            "cormorant".to_owned(),
-            FontData::from_static(cormorant).into(),
-        );
+        if is_font_file(cormorant) {
+            fonts.font_data.insert(
+                "cormorant".to_owned(),
+                FontData::from_static(cormorant).into(),
+            );
+        }
     }
 
     // ── Noto Sans SC (CJK fallback) ───────────────────────────────────
     #[cfg(not(test))]
     {
         let noto_sans_sc = include_bytes!("../../assets/fonts/NotoSansSC-Regular.otf");
-        fonts.font_data.insert(
-            "noto_sans_sc".to_owned(),
-            FontData::from_static(noto_sans_sc).into(),
-        );
+        if is_font_file(noto_sans_sc) {
+            fonts.font_data.insert(
+                "noto_sans_sc".to_owned(),
+                FontData::from_static(noto_sans_sc).into(),
+            );
+        }
     }
 
     // Register Inter as the primary proportional font (prepend so it wins)
