@@ -37,7 +37,7 @@ pub struct ModuleUiEntry {
 ///   reflect reality. (A previous hand-maintained static table claimed only
 ///   Puberty Simulator had latency, under-reporting by ~10×2048 samples.)
 ///
-/// The returned `Vec` always has exactly 21 elements.
+/// The returned `Vec` always has exactly 11 elements.
 pub fn build_ui_entries(
     params: &AkiFxParams,
     modules: &[Box<dyn crate::modules::AkiFxModule>],
@@ -60,26 +60,16 @@ pub fn build_ui_entries(
 
     let entries = vec![
         entry!(0, sine_gen,              "Sine Generator",          "sine_gen"),
-        entry!(1, midi_inverter,         "MIDI Inverter",           "midi_inverter"),
-        entry!(2, poly_mod_synth,        "Poly Mod Synth",          "poly_mod_synth"),
-        entry!(3, playground,            "Playground",              "playground"),
-        entry!(4, soft_vacuum,           "Soft Vacuum",             "soft_vacuum"),
-        entry!(5, crisp,                 "Crisp",                   "crisp"),
-        entry!(6, spectral_gate,         "Spectral Gate",           "spectral_gate"),
-        entry!(7, frequency_shift,       "Frequency Shift",         "frequency_shift"),
-        entry!(8, frequency_magnet,      "Frequency Magnet",        "frequency_magnet"),
-        entry!(9, bin_scrambler,         "Bin Scrambler",           "bin_scrambler"),
-        entry!(10, morph,                "Morph",                   "morph"),
-        entry!(11, phase_lock,           "Phase Lock",              "phase_lock"),
-        entry!(12, sinusoidal_shaped_filter, "Sinusoidal Shaped Filter", "sinusoidal_shaped_filter"),
-        entry!(13, puberty_simulator,    "Puberty Simulator",       "puberty_simulator"),
-        entry!(14, crossover,            "Crossover",               "crossover"),
-        entry!(15, diopser,              "Diopser",                 "diopser"),
-        entry!(16, loudness_war_winner,  "Loudness War Winner",     "loudness_war_winner"),
-        entry!(17, spectral_compressor,  "Spectral Compressor",     "spectral_compressor"),
-        entry!(18, buffr_glitch,         "Buffr Glitch",            "buffr_glitch"),
-        entry!(19, gain,                 "Gain",                    "gain"),
-        entry!(20, safety_limiter,       "Safety Limiter",          "safety_limiter"),
+        entry!(1, soft_vacuum,           "Soft Vacuum",             "soft_vacuum"),
+        entry!(2, crisp,                 "Crisp",                   "crisp"),
+        entry!(3, spectral_gate,         "Spectral Gate",           "spectral_gate"),
+        entry!(4, frequency_shift,       "Frequency Shift",         "frequency_shift"),
+        entry!(5, spectral_compressor,   "Spectral Compressor",     "spectral_compressor"),
+        entry!(6, crossover,             "Crossover",               "crossover"),
+        entry!(7, diopser,               "Diopser",                 "diopser"),
+        entry!(8, buffr_glitch,          "Buffr Glitch",            "buffr_glitch"),
+        entry!(9, gain,                  "Gain",                    "gain"),
+        entry!(10, safety_limiter,       "Safety Limiter",          "safety_limiter"),
     ];
 
     entries
@@ -138,27 +128,17 @@ mod tests {
         let chain = crate::create_default_chain(&params);
         let entries = build_ui_entries(&params, chain.modules());
 
-        assert_eq!(entries.len(), 21, "Expected exactly 21 UI entries");
+        assert_eq!(entries.len(), 11, "Expected exactly 11 UI entries");
 
         let expected_names = [
             "Sine Generator",
-            "MIDI Inverter",
-            "Poly Mod Synth",
-            "Playground",
             "Soft Vacuum",
             "Crisp",
             "Spectral Gate",
             "Frequency Shift",
-            "Frequency Magnet",
-            "Bin Scrambler",
-            "Morph",
-            "Phase Lock",
-            "Sinusoidal Shaped Filter",
-            "Puberty Simulator",
+            "Spectral Compressor",
             "Crossover",
             "Diopser",
-            "Loudness War Winner",
-            "Spectral Compressor",
             "Buffr Glitch",
             "Gain",
             "Safety Limiter",
@@ -191,13 +171,10 @@ mod tests {
         }
         // Sanity: with all engines built, the SpectralSuite-derived modules
         // report fft_size + hop_size = 2048 + 512 (matching the C++
-        // plugins), while Puberty Simulator defaults to a smaller
-        // 1024-sample window and Spectral Compressor reports its 2048
-        // window.
-        assert_eq!(entries[6].latency_samples, 2560, "Spectral Gate");
-        assert_eq!(entries[13].latency_samples, 1024, "Puberty Simulator");
-        assert_eq!(entries[17].latency_samples, 2048, "Spectral Compressor");
-        assert_eq!(entries[19].latency_samples, 0, "Gain");
+        // plugins), while Spectral Compressor reports its 2048 window.
+        assert_eq!(entries[3].latency_samples, 2560, "Spectral Gate");
+        assert_eq!(entries[5].latency_samples, 2048, "Spectral Compressor");
+        assert_eq!(entries[9].latency_samples, 0, "Gain");
     }
 
     #[test]
@@ -207,11 +184,8 @@ mod tests {
         let entries = build_ui_entries(&params, chain.modules());
 
         let expected_prefixes = [
-            "sine_gen", "midi_inverter", "poly_mod_synth", "playground",
-            "soft_vacuum", "crisp", "spectral_gate", "frequency_shift",
-            "frequency_magnet", "bin_scrambler", "morph", "phase_lock",
-            "sinusoidal_shaped_filter", "puberty_simulator", "crossover",
-            "diopser", "loudness_war_winner", "spectral_compressor",
+            "sine_gen", "soft_vacuum", "crisp", "spectral_gate",
+            "frequency_shift", "spectral_compressor", "crossover", "diopser",
             "buffr_glitch", "gain", "safety_limiter",
         ];
 
@@ -239,16 +213,16 @@ mod tests {
         // ── Pre-wiring: entry and module flags are DIFFERENT Arcs ──────
         assert!(
             !Arc::ptr_eq(
-                &entries[19].bypass,
-                chain.modules()[19].bypass_flag()
+                &entries[9].bypass,
+                chain.modules()[9].bypass_flag()
             ),
             "pre-wiring: entry bypass must be a different Arc than module's"
         );
 
         // Toggle the entry's placeholder — module must NOT change.
-        entries[19].bypass.store(false, std::sync::atomic::Ordering::Relaxed);
+        entries[9].bypass.store(false, std::sync::atomic::Ordering::Relaxed);
         assert!(
-            chain.modules()[19].is_bypassed(),
+            chain.modules()[9].is_bypassed(),
             "pre-wiring: module bypass must remain true regardless of entry"
         );
 
@@ -256,23 +230,23 @@ mod tests {
         wire_bypass_flags(&mut entries, chain.modules());
         assert!(
             std::sync::Arc::ptr_eq(
-                &entries[19].bypass,
-                chain.modules()[19].bypass_flag()
+                &entries[9].bypass,
+                chain.modules()[9].bypass_flag()
             ),
             "post-wiring: entry bypass flag must BE the module's flag"
         );
 
         // store(false) → module is no longer bypassed
-        entries[19].bypass.store(false, std::sync::atomic::Ordering::Relaxed);
+        entries[9].bypass.store(false, std::sync::atomic::Ordering::Relaxed);
         assert!(
-            !chain.modules()[19].is_bypassed(),
+            !chain.modules()[9].is_bypassed(),
             "GUI toggle to active must gate audio-thread processing"
         );
 
         // store(true) → module is bypassed again
-        entries[19].bypass.store(true, std::sync::atomic::Ordering::Relaxed);
+        entries[9].bypass.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(
-            chain.modules()[19].is_bypassed(),
+            chain.modules()[9].is_bypassed(),
             "GUI toggle to bypassed must gate audio-thread processing"
         );
     }
@@ -290,18 +264,18 @@ mod tests {
         sync_persisted_enabled(&params, &entries);
         assert_eq!(
             *params.module_enabled.lock(),
-            vec![false; 21],
+            vec![false; 11],
             "all modules start bypassed"
         );
 
         // Light two modules → persisted state flips those entries.
-        entries[19].bypass.store(false, Ordering::Relaxed); // Gain
-        entries[20].bypass.store(false, Ordering::Relaxed); // Safety Limiter
+        entries[9].bypass.store(false, Ordering::Relaxed); // Gain
+        entries[10].bypass.store(false, Ordering::Relaxed); // Safety Limiter
         sync_persisted_enabled(&params, &entries);
         let enabled = params.module_enabled.lock();
-        assert_eq!(enabled.len(), 21);
+        assert_eq!(enabled.len(), 11);
         assert!(!enabled[0], "untoggled module stays off");
-        assert!(enabled[19], "Gain should be persisted as enabled");
-        assert!(enabled[20], "Safety Limiter should be persisted as enabled");
+        assert!(enabled[9], "Gain should be persisted as enabled");
+        assert!(enabled[10], "Safety Limiter should be persisted as enabled");
     }
 }

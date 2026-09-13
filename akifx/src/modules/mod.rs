@@ -33,26 +33,15 @@
 
 pub mod chain;
 pub mod gain;
-// Module placeholders — implemented wave by wave. Empty files compile fine.
 pub mod sine_gen;
-pub mod midi_inverter;
-pub mod loudness_war_winner;
 pub mod safety_limiter;
 pub mod crisp;
 pub mod buffr_glitch;
 pub mod diopser;
-pub mod puberty_simulator;
 pub mod soft_vacuum;
 pub mod crossover;
-pub mod poly_mod_synth;
-pub mod playground;
 pub mod spectral_gate;
 pub mod frequency_shift;
-pub mod frequency_magnet;
-pub mod bin_scrambler;
-pub mod morph;
-pub mod phase_lock;
-pub mod sinusoidal_shaped_filter;
 pub mod spectral_compressor;
 
 pub use chain::ModuleChain;

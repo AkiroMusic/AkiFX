@@ -14,24 +14,14 @@ pub use modules::chain::SharedOrder;
 pub use modules::chain::ModuleChain;
 pub use modules::AkiFxModule;
 
-use modules::bin_scrambler::{BinScramblerModule, BinScramblerParams};
 use modules::buffr_glitch::{BuffrGlitchModule, BuffrGlitchParams};
 use modules::crisp::{CrispModule, CrispParams};
 use modules::crossover::{CrossoverModule, CrossoverParams};
 use modules::diopser::{DiopserModule, DiopserParams};
-use modules::frequency_magnet::{FrequencyMagnetModule, FrequencyMagnetParams};
 use modules::frequency_shift::{FrequencyShiftModule, FrequencyShiftParams};
 use modules::gain::{GainModule, GainParams};
-use modules::loudness_war_winner::{LoudnessWarWinnerModule, LoudnessWarWinnerParams};
-use modules::midi_inverter::{MidiInverterModule, MidiInverterParams};
-use modules::morph::{MorphModule, MorphParams};
-use modules::phase_lock::{PhaseLockModule, PhaseLockParams};
-use modules::playground::{PlaygroundModule, PlaygroundParams};
-use modules::poly_mod_synth::{PolyModSynthModule, PolyModSynthParams};
-use modules::puberty_simulator::{PubertySimulatorModule, PubertySimulatorParams};
 use modules::safety_limiter::{SafetyLimiterModule, SafetyLimiterParams};
 use modules::sine_gen::{SineGenModule, SineGenParams};
-use modules::sinusoidal_shaped_filter::{SinusoidalShapedFilterModule, SinusoidalShapedFilterParams};
 use modules::soft_vacuum::{SoftVacuumModule, SoftVacuumParams};
 use modules::spectral_compressor::{SpectralCompressorModule, SpectralCompressorParams};
 use modules::spectral_gate::{SpectralGateModule, SpectralGateParams};
@@ -59,36 +49,20 @@ pub fn apply_gain(gain: f32, samples: &mut [f32]) {
 /// # Processing Order
 ///
 /// 1.  sine_gen              — Oscillator source
-/// 2.  midi_inverter         — MIDI transform (no audio effect)
-/// 3.  poly_mod_synth        — Polyphonic MIDI-driven synth
-/// 4.  playground            — Experimental spectral playground
-/// 5.  soft_vacuum           — Distortion / saturation
-/// 6.  crisp                 — Transient shaper / enhancer
-/// 7.  spectral_gate         — Spectral noise gate
-/// 8.  frequency_shift       — Bin-wise frequency shifting
-/// 9.  frequency_magnet      — Bin pulling toward harmonics
-/// 10. bin_scrambler         — Randomize bin ordering
-/// 11. morph                 — Spectral morphing
-/// 12. phase_lock            — Lock bin phases
-/// 13. sinusoidal_shaped_filter — Sinusoidal spectral filter
-/// 14. puberty_simulator     — FFT pitch shifter
-/// 15. crossover             — Multiband split
-/// 16. diopser               — Allpass phaser
-/// 17. loudness_war_winner   — Limiter / maximizer
-/// 18. spectral_compressor   — Per-bin compressor
-/// 19. buffr_glitch          — Buffer stutter / glitch
-/// 20. gain                  — Master gain
-/// 21. safety_limiter        — Final safety limiter
+/// 2.  soft_vacuum           — Distortion / saturation
+/// 3.  crisp                 — Transient shaper / enhancer
+/// 4.  spectral_gate         — Spectral noise gate
+/// 5.  frequency_shift       — Bin-wise frequency shifting
+/// 6.  spectral_compressor   — Per-bin compressor
+/// 7.  crossover             — Multiband split
+/// 8.  diopser               — Allpass phaser
+/// 9.  buffr_glitch          — Buffer stutter / glitch
+/// 10. gain                  — Master gain
+/// 11. safety_limiter        — Final safety limiter
 #[derive(Params)]
 pub struct AkiFxParams {
     #[nested(id_prefix = "sine_gen")]
     pub sine_gen: Arc<SineGenParams>,
-    #[nested(id_prefix = "midi_inverter")]
-    pub midi_inverter: Arc<MidiInverterParams>,
-    #[nested(id_prefix = "poly_mod_synth")]
-    pub poly_mod_synth: Arc<PolyModSynthParams>,
-    #[nested(id_prefix = "playground")]
-    pub playground: Arc<PlaygroundParams>,
     #[nested(id_prefix = "soft_vacuum")]
     pub soft_vacuum: Arc<SoftVacuumParams>,
     #[nested(id_prefix = "crisp")]
@@ -97,24 +71,10 @@ pub struct AkiFxParams {
     pub spectral_gate: Arc<SpectralGateParams>,
     #[nested(id_prefix = "frequency_shift")]
     pub frequency_shift: Arc<FrequencyShiftParams>,
-    #[nested(id_prefix = "frequency_magnet")]
-    pub frequency_magnet: Arc<FrequencyMagnetParams>,
-    #[nested(id_prefix = "bin_scrambler")]
-    pub bin_scrambler: Arc<BinScramblerParams>,
-    #[nested(id_prefix = "morph")]
-    pub morph: Arc<MorphParams>,
-    #[nested(id_prefix = "phase_lock")]
-    pub phase_lock: Arc<PhaseLockParams>,
-    #[nested(id_prefix = "sinusoidal_shaped_filter")]
-    pub sinusoidal_shaped_filter: Arc<SinusoidalShapedFilterParams>,
-    #[nested(id_prefix = "puberty_simulator")]
-    pub puberty_simulator: Arc<PubertySimulatorParams>,
     #[nested(id_prefix = "crossover")]
     pub crossover: Arc<CrossoverParams>,
     #[nested(id_prefix = "diopser")]
     pub diopser: Arc<DiopserParams>,
-    #[nested(id_prefix = "loudness_war_winner")]
-    pub loudness_war_winner: Arc<LoudnessWarWinnerParams>,
     #[nested(id_prefix = "spectral_compressor")]
     pub spectral_compressor: Arc<SpectralCompressorParams>,
     #[nested(id_prefix = "buffr_glitch")]
@@ -124,7 +84,7 @@ pub struct AkiFxParams {
     #[nested(id_prefix = "safety_limiter")]
     pub safety_limiter: Arc<SafetyLimiterParams>,
 
-    /// Persisted module processing order. Initialized to identity `[0, 21)`.
+    /// Persisted module processing order. Initialized to identity `[0, 11)`.
     /// Deserialized by nih-plug via `#[persist]` when the host restores state.
     #[persist = "module_order"]
     pub module_order: parking_lot::Mutex<Vec<usize>>,
@@ -145,60 +105,45 @@ impl Default for AkiFxParams {
     fn default() -> Self {
         Self {
             sine_gen: Arc::new(SineGenParams::new(-12.0, 440.0)),
-            midi_inverter: Arc::new(MidiInverterParams::new(true)),
-            poly_mod_synth: Arc::new(PolyModSynthParams::new()),
-            playground: Arc::new(PlaygroundParams::new()),
             soft_vacuum: Arc::new(SoftVacuumParams::default()),
             crisp: Arc::new(CrispParams::new()),
             spectral_gate: Arc::new(SpectralGateParams::new()),
             frequency_shift: Arc::new(FrequencyShiftParams::new()),
-            frequency_magnet: Arc::new(FrequencyMagnetParams::new()),
-            bin_scrambler: Arc::new(BinScramblerParams::new()),
-            morph: Arc::new(MorphParams::new()),
-            phase_lock: Arc::new(PhaseLockParams::new()),
-            sinusoidal_shaped_filter: Arc::new(SinusoidalShapedFilterParams::new()),
-            puberty_simulator: Arc::new(PubertySimulatorParams::new()),
             crossover: Arc::new(CrossoverParams::default()),
             diopser: Arc::new(DiopserParams::new()),
-            loudness_war_winner: Arc::new(LoudnessWarWinnerParams::default()),
             spectral_compressor: Arc::new(SpectralCompressorParams::new()),
             buffr_glitch: Arc::new(BuffrGlitchParams::default()),
             gain: Arc::new(GainParams::new(0.0)),
             safety_limiter: Arc::new(SafetyLimiterParams::new()),
-            module_order: parking_lot::Mutex::new((0..21).collect()),
+            module_order: parking_lot::Mutex::new((0..11).collect()),
             ui_zoom: parking_lot::Mutex::new(1.0),
-            module_enabled: parking_lot::Mutex::new(vec![false; 21]),
+            module_enabled: parking_lot::Mutex::new(vec![false; 11]),
         }
     }
 }
 
 // ── Default chain constructor ───────────────────────────────────────────────
 
-/// Build the default processing chain with all 21 modules in order.
+/// Build the default processing chain with all 11 modules in order.
 ///
 /// Each module receives the corresponding `Arc<XxxParams>` from the umbrella,
 /// so host automation changes propagate to the audio thread without extra work.
 ///
 /// # Processing Order Rationale
 ///
-/// 1. **Sources first** (sine_gen, midi_inverter, poly_mod_synth): Generate
-///    or transform the audio/MIDI signal before any effects.
-/// 2. **Playground** after sources: experimental spectral processing on
-///    freshly generated audio.
-/// 3. **Distortion** (soft_vacuum, crisp): Shape dynamics and timbre early
+/// 1. **Source first** (sine_gen): Generate the audio signal before any
+///    effects.
+/// 2. **Distortion** (soft_vacuum, crisp): Shape dynamics and timbre early
 ///    to feed downstream spectral effects.
-/// 4. **Spectral effects** (spectral_gate → frequency_shift → frequency_magnet
-///    → bin_scrambler → morph → phase_lock → sinusoidal_shaped_filter):
-///    Process the frequency domain in order of increasing complexity.
-/// 5. **Pitch shift** (puberty_simulator): FFT-based pitch shifting after
-///    spectral effects to avoid double-processing.
-/// 6. **Multiband + phaser** (crossover, diopser): Time-domain processing
+/// 3. **Spectral effects** (spectral_gate → frequency_shift): Frequency-domain
+///    processing.
+/// 4. **Dynamics** (spectral_compressor): Per-band dynamic control after
+///    tonal shaping.
+/// 5. **Multiband + phaser** (crossover, diopser): Time-domain processing
 ///    that benefits from spectrally-shaped input.
-/// 7. **Dynamics** (loudness_war_winner, spectral_compressor): Control
-///    dynamics after tonal shaping.
-/// 8. **Glitch** (buffr_glitch): Buffer-based stutter effects late in chain
+/// 6. **Glitch** (buffr_glitch): Buffer-based stutter effects late in chain
 ///    to capture the fully processed signal.
-/// 9. **Master** (gain, safety_limiter): Final gain stage and brickwall
+/// 7. **Master** (gain, safety_limiter): Final gain stage and brickwall
 ///    limiter to protect the output.
 pub fn create_default_chain(params: &AkiFxParams) -> ModuleChain {
     let mut chain = ModuleChain::new();
@@ -212,28 +157,18 @@ pub fn create_default_chain(params: &AkiFxParams) -> ModuleChain {
     }
 
     push!(SineGenModule, params.sine_gen);
-    push!(MidiInverterModule, params.midi_inverter);
-    push!(PolyModSynthModule, params.poly_mod_synth);
-    push!(PlaygroundModule, params.playground);
     push!(SoftVacuumModule, params.soft_vacuum);
     push!(CrispModule, params.crisp);
     push!(SpectralGateModule, params.spectral_gate);
     push!(FrequencyShiftModule, params.frequency_shift);
-    push!(FrequencyMagnetModule, params.frequency_magnet);
-    push!(BinScramblerModule, params.bin_scrambler);
-    push!(MorphModule, params.morph);
-    push!(PhaseLockModule, params.phase_lock);
-    push!(SinusoidalShapedFilterModule, params.sinusoidal_shaped_filter);
-    push!(PubertySimulatorModule, params.puberty_simulator);
+    push!(SpectralCompressorModule, params.spectral_compressor);
     push!(CrossoverModule, params.crossover);
     push!(DiopserModule, params.diopser);
-    push!(LoudnessWarWinnerModule, params.loudness_war_winner);
-    push!(SpectralCompressorModule, params.spectral_compressor);
     push!(BuffrGlitchModule, params.buffr_glitch);
     push!(GainModule, params.gain);
     push!(SafetyLimiterModule, params.safety_limiter);
 
-    assert_eq!(chain.len(), 21, "Chain must contain exactly 21 modules");
+    assert_eq!(chain.len(), 11, "Chain must contain exactly 11 modules");
     chain
 }
 

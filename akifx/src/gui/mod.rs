@@ -1042,10 +1042,10 @@ mod tests {
         let params = AkiFxParams::default();
         let chain = crate::create_default_chain(&params);
         let entries = state::build_ui_entries(&params, chain.modules());
-        let identity: Vec<usize> = (0..21).collect();
+        let identity: Vec<usize> = (0..11).collect();
 
         let ordered = ordered_entries(&entries, &identity);
-        assert_eq!(ordered.len(), 21);
+        assert_eq!(ordered.len(), 11);
         for (i, entry) in ordered.iter().enumerate() {
             assert_eq!(entry.name, entries[i].name);
         }
@@ -1058,12 +1058,12 @@ mod tests {
         let chain = crate::create_default_chain(&params);
         let entries = state::build_ui_entries(&params, chain.modules());
         // Reverse order: last module first.
-        let reversed: Vec<usize> = (0..21).rev().collect();
+        let reversed: Vec<usize> = (0..11).rev().collect();
 
         let ordered = ordered_entries(&entries, &reversed);
-        assert_eq!(ordered.len(), 21);
+        assert_eq!(ordered.len(), 11);
         assert_eq!(ordered[0].name, "Safety Limiter");
-        assert_eq!(ordered[20].name, "Sine Generator");
+        assert_eq!(ordered[10].name, "Sine Generator");
     }
 
     /// ordered_entries filters out-of-range indices silently.
@@ -1077,8 +1077,8 @@ mod tests {
         let ordered = ordered_entries(&entries, &order_with_gaps);
         assert_eq!(ordered.len(), 3);
         assert_eq!(ordered[0].name, "Sine Generator");
-        assert_eq!(ordered[1].name, "MIDI Inverter");
-        assert_eq!(ordered[2].name, "Poly Mod Synth");
+        assert_eq!(ordered[1].name, "Soft Vacuum");
+        assert_eq!(ordered[2].name, "Crisp");
     }
 
     // ── position_of_module tests ────────────────────────────────────────
@@ -1086,8 +1086,8 @@ mod tests {
     /// Identity order: position_of_module(i) == i for all i.
     #[test]
     fn position_of_module_identity() {
-        let order: Vec<usize> = (0..21).collect();
-        for i in 0..21 {
+        let order: Vec<usize> = (0..11).collect();
+        for i in 0..11 {
             assert_eq!(
                 position_of_module(&order, i),
                 Some(i),
@@ -1099,30 +1099,30 @@ mod tests {
     /// Custom permutation maps correctly.
     #[test]
     fn position_of_module_custom_permutation() {
-        // order[0]=20, order[1]=19, ..., order[20]=0  (reversed)
-        let order: Vec<usize> = (0..21).rev().collect();
-        // Module 20 is at position 0
-        assert_eq!(position_of_module(&order, 20), Some(0));
-        // Module 0 is at position 20
-        assert_eq!(position_of_module(&order, 0), Some(20));
-        // Module 10 is at position 10 (center stays)
-        assert_eq!(position_of_module(&order, 10), Some(10));
+        // order[0]=10, order[1]=9, ..., order[10]=0  (reversed)
+        let order: Vec<usize> = (0..11).rev().collect();
+        // Module 10 is at position 0
+        assert_eq!(position_of_module(&order, 10), Some(0));
+        // Module 0 is at position 10
+        assert_eq!(position_of_module(&order, 0), Some(10));
+        // Module 5 is at position 5 (center stays)
+        assert_eq!(position_of_module(&order, 5), Some(5));
     }
 
     /// Non-contiguous permutation with a gap.
     #[test]
     fn position_of_module_sparse_permutation() {
-        let order = vec![5, 0, 19, 3];
+        let order = vec![5, 0, 8, 3];
         assert_eq!(position_of_module(&order, 5), Some(0));
         assert_eq!(position_of_module(&order, 0), Some(1));
-        assert_eq!(position_of_module(&order, 19), Some(2));
+        assert_eq!(position_of_module(&order, 8), Some(2));
         assert_eq!(position_of_module(&order, 3), Some(3));
     }
 
     /// Module index not in order → None.
     #[test]
     fn position_of_module_not_found() {
-        let order: Vec<usize> = (0..21).collect();
+        let order: Vec<usize> = (0..11).collect();
         assert_eq!(position_of_module(&order, 99), None);
     }
 
@@ -1134,17 +1134,17 @@ mod tests {
 
     /// After reorder, selected module identity is preserved.
     ///
-    /// Simulates: select module 19 ("Gain"), then reverse the order.
-    /// selected should still point at module 19 (now at position 1).
+    /// Simulates: select module 9 ("Gain"), then reverse the order.
+    /// selected should still point at module 9 (now at position 1).
     #[test]
     fn selected_preserves_module_identity_after_reorder() {
         let params = AkiFxParams::default();
         let chain = crate::create_default_chain(&params);
         let entries = state::build_ui_entries(&params, chain.modules());
 
-        // selected = module index 19 (Gain)
-        let selected_module: usize = 19;
-        let order_after_reorder: Vec<usize> = (0..21).rev().collect();
+        // selected = module index 9 (Gain)
+        let selected_module: usize = 9;
+        let order_after_reorder: Vec<usize> = (0..11).rev().collect();
 
         // Resolve the selected entry via module index
         let entry = &entries[selected_module];
@@ -1152,7 +1152,7 @@ mod tests {
 
         // Find position in the new order
         let pos = position_of_module(&order_after_reorder, selected_module)
-            .expect("module 19 must be in order");
+            .expect("module 9 must be in order");
         let visual = ordered_entries(&entries, &order_after_reorder);
         assert_eq!(visual[pos].name, "Gain");
     }
@@ -1164,15 +1164,15 @@ mod tests {
         let chain = crate::create_default_chain(&params);
         let entries = state::build_ui_entries(&params, chain.modules());
 
-        // Reversed order: module 20 (Safety Limiter) is at position 0
-        let reversed: Vec<usize> = (0..21).rev().collect();
+        // Reversed order: module 10 (Safety Limiter) is at position 0
+        let reversed: Vec<usize> = (0..11).rev().collect();
         let selected_module: usize = 0; // Sine Generator
 
         let pos = position_of_module(&reversed, selected_module).unwrap();
         let visual = ordered_entries(&entries, &reversed);
-        // Position 0 in visual is Safety Limiter; Sine Generator is at position 20
+        // Position 0 in visual is Safety Limiter; Sine Generator is at position 10
         assert_eq!(visual[pos].name, "Sine Generator");
-        assert_eq!(pos, 20);
+        assert_eq!(pos, 10);
     }
 
     /// BUG REPRODUCTION: selected as position (old code) points at wrong
@@ -1183,26 +1183,26 @@ mod tests {
         let chain = crate::create_default_chain(&params);
         let entries = state::build_ui_entries(&params, chain.modules());
 
-        // Before reorder: identity order, user clicks position 19 → Gain
-        let identity: Vec<usize> = (0..21).collect();
+        // Before reorder: identity order, user clicks position 9 → Gain
+        let identity: Vec<usize> = (0..11).collect();
         let visual_before = ordered_entries(&entries, &identity);
-        assert_eq!(visual_before[19].name, "Gain");
+        assert_eq!(visual_before[9].name, "Gain");
 
-        // OLD (buggy) semantics: selected = 19 (position)
-        let selected_position: usize = 19;
+        // OLD (buggy) semantics: selected = 9 (position)
+        let selected_position: usize = 9;
 
-        // After reorder: reversed. Position 19 is now module 1 (MIDI Inverter)
-        let reversed: Vec<usize> = (0..21).rev().collect();
+        // After reorder: reversed. Position 9 is now module 1 (Soft Vacuum)
+        let reversed: Vec<usize> = (0..11).rev().collect();
         let visual_after = ordered_entries(&entries, &reversed);
 
-        // BUG: position 19 in reversed order ≠ Gain
+        // BUG: position 9 in reversed order ≠ Gain
         assert_ne!(
             visual_after[selected_position].name, "Gain",
             "position-based selection breaks after reorder"
         );
 
-        // NEW (correct) semantics: selected = 19 (module index)
-        let selected_module: usize = 19;
+        // NEW (correct) semantics: selected = 9 (module index)
+        let selected_module: usize = 9;
         let pos = position_of_module(&reversed, selected_module).unwrap();
         assert_eq!(
             visual_after[pos].name, "Gain",
@@ -1216,12 +1216,12 @@ mod tests {
         let params = AkiFxParams::default();
         let chain = crate::create_default_chain(&params);
         let entries = state::build_ui_entries(&params, chain.modules());
-        let order: Vec<usize> = (0..21).rev().collect();
+        let order: Vec<usize> = (0..11).rev().collect();
 
-        // Select module 19 (Gain) — stored as module_idx, not position
-        let selected_module: usize = 19;
+        // Select module 9 (Gain) - stored as module_idx, not position
+        let selected_module: usize = 9;
         let pos = position_of_module(&order, selected_module)
-            .expect("module 19 must be in order");
+            .expect("module 9 must be in order");
         let visual = ordered_entries(&entries, &order);
         let entry = visual.get(pos).expect("position must be valid");
 
@@ -1234,7 +1234,7 @@ mod tests {
         let params = AkiFxParams::default();
         let chain = crate::create_default_chain(&params);
         let _entries = state::build_ui_entries(&params, chain.modules());
-        let order: Vec<usize> = (0..21).collect();
+        let order: Vec<usize> = (0..11).collect();
 
         // Module 99 doesn't exist
         let result = position_of_module(&order, 99);

@@ -14,18 +14,6 @@ pub fn module_intro(id_prefix: &str) -> Option<&'static str> {
             "Test-tone generator (\u{6d4b}\u{8bd5}\u{4fe1}\u{53f7}\u{53d1}\u{751f}\u{5668}): \
              plays a sine wave via MIDI note or fallback frequency.",
         ),
-        "midi_inverter" => Some(
-            "MIDI transform (\u{004d}\u{0049}\u{0044}\u{0049}\u{53cd}\u{8f6c}\u{5668}): \
-             inverts note pitches, velocities, and channels for creative MIDI mangling.",
-        ),
-        "poly_mod_synth" => Some(
-            "Polyphonic MIDI synth (\u{591a}\u{58f0}\u{5408}\u{6210}\u{5668}): \
-             drum-style synth driven by MIDI notes with amplitude envelopes.",
-        ),
-        "playground" => Some(
-            "Spectral playground (\u{9891}\u{8c31}\u{5b9e}\u{9a8c}\u{573a}): \
-             experimental phase-vocoder playground for spectral window manipulation.",
-        ),
         "soft_vacuum" => Some(
             "Tube saturation (\u{771f}\u{7a7a}\u{7ba1}\u{9971}\u{548c}): \
              Airwindows Hard Vacuum port — warm tube-style drive with oversampling.",
@@ -42,30 +30,6 @@ pub fn module_intro(id_prefix: &str) -> Option<&'static str> {
             "Bin-wise frequency shifter (\u{9891}\u{7387}\u{642c}\u{79fb}): \
              shifts every FFT bin by a fixed offset for metallic ring textures.",
         ),
-        "frequency_magnet" => Some(
-            "Frequency magnet (\u{9891}\u{7387}\u{5438}\u{9644}): \
-             pulls bins toward the nearest harmonic of a target frequency.",
-        ),
-        "bin_scrambler" => Some(
-            "Bin scrambler (\u{9891}\u{6bb5}\u{6253}\u{4e71}): \
-             randomizes FFT bin ordering for chaotic spectral reorderings.",
-        ),
-        "morph" => Some(
-            "Spectral morpher (\u{9891}\u{8c31}\u{5f62}\u{53d8}): \
-             interpolates between spectral magnitude/phase states over time.",
-        ),
-        "phase_lock" => Some(
-            "Phase & frequency lock (\u{76f8}\u{4f4d}\u{9501}\u{5b9a}): \
-             locks bin phases and/or magnitudes for sustained textures.",
-        ),
-        "sinusoidal_shaped_filter" => Some(
-            "Sinusoidal spectral filter (\u{6b63}\u{5f26}\u{6574}\u{5f62}\u{6ee4}\u{6ce2}\u{5668}): \
-             applies a sine-shaped spectral envelope for resonant filtering.",
-        ),
-        "puberty_simulator" => Some(
-            "FFT pitch shifter (\u{516b}\u{5ea6}\u{4e0b}\u{79fb}\u{53d8}\u{8c03}): \
-             shifts pitch by octaves via FFT resynthesis with windowed overlap.",
-        ),
         "crossover" => Some(
             "Multiband splitter (\u{5206}\u{9891}\u{5668}): \
              Linkwitz-Riley crossover for 2\u{2013}5 band processing.",
@@ -73,10 +37,6 @@ pub fn module_intro(id_prefix: &str) -> Option<&'static str> {
         "diopser" => Some(
             "Allpass phaser (\u{5168}\u{901a}\u{76f8}\u{4f4d}\u{6ee4}\u{6ce2}): \
              cascaded allpass filters with spread for swirling phase effects.",
-        ),
-        "loudness_war_winner" => Some(
-            "Limiter / maximizer (\u{54cd}\u{5ea6}\u{6218}\u{4e89}\u{80dc}\u{5229}\u{5668}): \
-             transparent brickwall limiter for competitive loudness.",
         ),
         "spectral_compressor" => Some(
             "Per-bin compressor (\u{9891}\u{8c31}\u{538b}\u{7f29}\u{5668}): \
@@ -205,19 +165,6 @@ pub fn param_tip(id_prefix: &str, param_lower: &str) -> Option<&'static str> {
         ("soft_vacuum", "oversampling_factor") => Some(
             "Oversampling ratio. Higher = less aliasing, more CPU. 16x recommended for heavy drive.",
         ),
-        // ── puberty_simulator ──────────────────────────────────────────
-        ("puberty_simulator", "pitch_octaves") => Some(
-            "Pitch shift amount in octaves. Negative = lower, positive = higher.",
-        ),
-        ("puberty_simulator", "window_size_order") => Some(
-            "FFT window size as power-of-2. Larger = cleaner pitch shift, more latency.",
-        ),
-        ("puberty_simulator", "overlap_times_order") => Some(
-            "Overlap factor for pitch resynthesis. Higher = smoother, fewer artifacts.",
-        ),
-        ("puberty_simulator", "mode") => Some(
-            "Resynthesis window shape. Rectangular = fast, Hann = smooth, Blackman = cleanest.",
-        ),
         // ── buffr_glitch ───────────────────────────────────────────────
         ("buffr_glitch", "dry_level") => Some(
             "Level of the unprocessed (dry) signal. Blends with the glitch output.",
@@ -276,82 +223,6 @@ pub fn param_tip(id_prefix: &str, param_lower: &str) -> Option<&'static str> {
         ("frequency_shift", "scale") => Some(
             "Scaling factor for the shift. 1.0 = direct bin offset, higher = exponential spread.",
         ),
-        // ── frequency_magnet ───────────────────────────────────────────
-        ("frequency_magnet", "frequency") => Some(
-            "Target frequency in Hz. Bins are pulled toward harmonics of this frequency.",
-        ),
-        ("frequency_magnet", "strength") => Some(
-            "Pull strength (%). Higher = bins lock more tightly to target harmonics.",
-        ),
-        ("frequency_magnet", "width_bias") => Some(
-            "Width of the magnet pull. Higher = wider frequency range affected per harmonic.",
-        ),
-        ("frequency_magnet", "use_legacy") => Some(
-            "Legacy mode uses the original SpectralSuite algorithm. Uncheck for updated behavior.",
-        ),
-        // ── bin_scrambler ──────────────────────────────────────────────
-        ("bin_scrambler", "scramble") => Some(
-            "Scramble intensity. Higher = more bins get reordered randomly.",
-        ),
-        ("bin_scrambler", "scatter") => Some(
-            "How far bins are scattered. Higher = bins jump to more distant positions.",
-        ),
-        ("bin_scrambler", "rate") => Some(
-            "Scramble update rate. Lower = slower re-randomization, more rhythmic gating.",
-        ),
-        ("bin_scrambler", "seed") => Some(
-            "Random seed. Same seed = same scramble pattern. Change for variety.",
-        ),
-        // ── morph ──────────────────────────────────────────────────────
-        ("morph", "mix") => Some(
-            "Blend between current and morphed spectrum. 1.0 = fully morphed.",
-        ),
-        ("morph", "use_pvoc") => Some(
-            "Phase vocoder mode. On = smoother spectral interpolation, off = raw bin morph.",
-        ),
-        ("morph", "num_overlaps") => Some(
-            "Number of STFT overlaps. Higher = smoother, more CPU.",
-        ),
-        // ── phase_lock ─────────────────────────────────────────────────
-        ("phase_lock", "phase_lock") => Some(
-            "Lock bin phases to a fixed state. Creates sustained, organ-like textures.",
-        ),
-        ("phase_lock", "phase_mix") => Some(
-            "Blend of locked vs. original phases. 100 = fully locked.",
-        ),
-        ("phase_lock", "mag_lock") => Some(
-            "Lock bin magnitudes. Freezes the spectral envelope for frozen textures.",
-        ),
-        ("phase_lock", "mag_mix") => Some("Blend of locked vs. original magnitudes. 100 = fully locked."),
-        ("phase_lock", "mag_track") => Some(
-            "Magnitude tracking speed. Higher = follow input dynamics faster.",
-        ),
-        ("phase_lock", "random_phase") => Some(
-            "Randomize bin phases. Higher = more noise-like, less tonal.",
-        ),
-        ("phase_lock", "morph_mag_and_phase") => Some(
-            "Morph between current and locked states over time.",
-        ),
-        ("phase_lock", "morph_duration") => Some(
-            "Duration of the morph transition in FFT frames.",
-        ),
-        // ── sinusoidal_shaped_filter ───────────────────────────────────
-        ("sinusoidal_shaped_filter", "frequency") => Some(
-            "Sine wave frequency controlling the spectral shape. Sweep for sweeping resonance.",
-        ),
-        ("sinusoidal_shaped_filter", "width") => Some(
-            "Width of the sine shape. Narrower = sharper peaks, wider = gentler undulation.",
-        ),
-        ("sinusoidal_shaped_filter", "phase") => Some(
-            "Phase offset of the sine shape. Shifts the spectral peaks left/right.",
-        ),
-        ("sinusoidal_shaped_filter", "mix") => Some(
-            "Blend between original and filtered spectrum. 100 = fully filtered.",
-        ),
-        ("sinusoidal_shaped_filter", "use_pvoc") => Some(
-            "Phase vocoder mode. On = smoother resynthesis, off = raw FFT filtering.",
-        ),
-        ("sinusoidal_shaped_filter", "num_overlaps") => Some("STFT overlap count. Higher = fewer artifacts, more CPU."),
         // ── sine_gen ───────────────────────────────────────────────────
         ("sine_gen", "level_db") => Some(
             "Output level in dB. Controls the sine generator volume.",
@@ -359,44 +230,9 @@ pub fn param_tip(id_prefix: &str, param_lower: &str) -> Option<&'static str> {
         ("sine_gen", "fallback_frequency") => Some(
             "Frequency in Hz when no MIDI note is active. Use for drone tones.",
         ),
-        // ── midi_inverter ──────────────────────────────────────────────
-        ("midi_inverter", "enable") => Some(
-            "Enable MIDI inversion. When on, note pitches, velocities, and channels are inverted.",
-        ),
-        // ── poly_mod_synth ─────────────────────────────────────────────
-        ("poly_mod_synth", "gain") => Some(
-            "Synth output gain in dB. Controls overall level of the poly synth.",
-        ),
-        ("poly_mod_synth", "amp_attack_ms") => Some(
-            "Amplitude attack time in ms. Shorter = punchier, longer = pad-like swell.",
-        ),
-        ("poly_mod_synth", "amp_release_ms") => Some(
-            "Amplitude release time in ms. Longer = notes ring out after note-off.",
-        ),
-        // ── playground ─────────────────────────────────────────────────
-        ("playground", "mix") => Some(
-            "Blend between dry and spectral-processed signal.",
-        ),
-        ("playground", "use_pvoc") => Some(
-            "Phase vocoder mode. Enables windowed spectral processing.",
-        ),
-        ("playground", "num_overlaps") => Some("STFT overlap count. Higher = smoother, more CPU."),
         // ── gain ───────────────────────────────────────────────────────
         ("gain", "gain") => Some(
             "Master output gain in dB. Final level before the safety limiter.",
-        ),
-        // ── loudness_war_winner ────────────────────────────────────────
-        ("loudness_war_winner", "threshold_db") => Some(
-            "Limiter threshold in dBFS. Signals above this are hard-limited.",
-        ),
-        ("loudness_war_winner", "win_harder") => Some(
-            "Aggressive mode. Boosts loudness further at the cost of transient clarity.",
-        ),
-        ("loudness_war_winner", "cutoff_hz") => Some(
-            "Low-pass filter on the limiter detection signal. Shapes frequency response of limiting.",
-        ),
-        ("loudness_war_winner", "trim") => Some(
-            "Input trim in dB. Adjust level before the limiter stage.",
         ),
         // ── safety_limiter ─────────────────────────────────────────────
         ("safety_limiter", "threshold") => Some(
@@ -413,15 +249,12 @@ pub fn param_tip(id_prefix: &str, param_lower: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    /// All 21 known module prefixes must return Some.
+    /// All 11 known module prefixes must return Some.
     #[test]
-    fn module_intro_covers_all_21_prefixes() {
+    fn module_intro_covers_all_11_prefixes() {
         let prefixes = [
-            "sine_gen", "midi_inverter", "poly_mod_synth", "playground",
-            "soft_vacuum", "crisp", "spectral_gate", "frequency_shift",
-            "frequency_magnet", "bin_scrambler", "morph", "phase_lock",
-            "sinusoidal_shaped_filter", "puberty_simulator", "crossover",
-            "diopser", "loudness_war_winner", "spectral_compressor",
+            "sine_gen", "soft_vacuum", "crisp", "spectral_gate",
+            "frequency_shift", "spectral_compressor", "crossover", "diopser",
             "buffr_glitch", "gain", "safety_limiter",
         ];
         for p in prefixes {
@@ -454,26 +287,15 @@ mod tests {
             ("diopser", "filter_resonance"),
             ("soft_vacuum", "drive"),
             ("soft_vacuum", "oversampling_factor"),
-            ("puberty_simulator", "pitch_octaves"),
-            ("puberty_simulator", "mode"),
             ("buffr_glitch", "attack_ms"),
             ("buffr_glitch", "octave_shift"),
             ("crisp", "amount"),
             ("crisp", "mode"),
             ("spectral_gate", "cutoff"),
             ("frequency_shift", "shift"),
-            ("frequency_magnet", "frequency"),
-            ("bin_scrambler", "scramble"),
-            ("morph", "mix"),
-            ("phase_lock", "phase_lock"),
-            ("sinusoidal_shaped_filter", "frequency"),
             ("gain", "gain"),
             ("safety_limiter", "threshold"),
-            ("loudness_war_winner", "threshold_db"),
             ("sine_gen", "level_db"),
-            ("midi_inverter", "enable"),
-            ("poly_mod_synth", "gain"),
-            ("playground", "mix"),
         ];
         for (prefix, param) in cases {
             let tip = param_tip(prefix, param)

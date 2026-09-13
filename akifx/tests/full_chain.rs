@@ -20,9 +20,9 @@ fn build_chain() -> (ModuleChain, Arc<AkiFxParams>) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn chain_contains_21_modules() {
+fn chain_contains_11_modules() {
     let (chain, _params) = build_chain();
-    assert_eq!(chain.len(), 21, "Expected exactly 21 modules in the chain");
+    assert_eq!(chain.len(), 11, "Expected exactly 11 modules in the chain");
 }
 
 #[test]
@@ -165,17 +165,18 @@ fn module_names_match_expected() {
 
     // Check that key modules are present
     assert!(names.contains(&"Sine Generator"), "Missing Sine Generator");
-    assert!(names.contains(&"MIDI Inverter"), "Missing MIDI Inverter");
-    assert!(names.contains(&"Gain"), "Missing Gain");
-    assert!(names.contains(&"Safety Limiter"), "Missing Safety Limiter");
+    assert!(names.contains(&"Soft Vacuum"), "Missing Soft Vacuum");
+    assert!(names.contains(&"Crisp"), "Missing Crisp");
+    assert!(names.contains(&"Spectral Gate"), "Missing Spectral Gate");
+    assert!(names.contains(&"Frequency Shift"), "Missing Frequency Shift");
     assert!(
         names.contains(&"Spectral Compressor"),
         "Missing Spectral Compressor"
     );
-    assert!(names.contains(&"Puberty Simulator"), "Missing Puberty Simulator");
-    assert!(
-        names.contains(&"Poly Mod Synth"),
-        "Missing Poly Mod Synth"
-    );
-    assert!(names.contains(&"Playground"), "Missing Playground");
+    assert!(names.contains(&"Crossover"), "Missing Crossover");
+    assert!(names.contains(&"Diopser"), "Missing Diopser");
+    assert!(names.contains(&"Buffr Glitch"), "Missing Buffr Glitch");
+    assert!(names.contains(&"Gain"), "Missing Gain");
+    assert!(names.contains(&"Safety Limiter"), "Missing Safety Limiter");
+    assert_eq!(names.len(), 11, "Chain must have exactly 11 modules");
 }

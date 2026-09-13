@@ -211,7 +211,7 @@ impl SpectralGateModule {
 
 impl AkiFxModule for SpectralGateModule {
     fn name(&self) -> &'static str {
-        "SpectralGate"
+        "Spectral Gate"
     }
 
     fn params(&self) -> &dyn Params {
