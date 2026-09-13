@@ -276,7 +276,7 @@ impl Default for AkiFx {
 impl Plugin for AkiFx {
     const NAME: &'static str = "AkiFX";
     const VENDOR: &'static str = "Akiro";
-    const URL: &'static str = "https://github.com/akiro/akifx";
+    const URL: &'static str = "https://github.com/AkiroMusic/AkiFX";
     const EMAIL: &'static str = "akiro@example.com";
 
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
