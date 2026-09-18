@@ -1,39 +1,65 @@
-//! Minimal analyzer data stub for the spectral compressor.
+//! Spectrum view data for the Spectral Compressor's GUI.
 //!
-//! In the original nih-plug plugin, this data feeds a triple-buffered spectrum
-//! analyzer for the GUI. Here we provide the data structure only — actual GUI
-//! integration is deferred to a future phase.
+//! The audio thread publishes a [`SpectrumSnapshot`] into a [`SpectrumView`]
+//! holder at display rate (~30 Hz); the editor reads the latest snapshot
+//! each frame. The holder is a mutex over an `Arc` so publication never
+//! blocks the GUI and reads never block the audio thread.
 
-use super::curve::CurveParams;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
-/// Data used for the spectrum analyzer display.
-///
-/// This contains the envelope follower magnitudes and gain reduction data,
-/// both accumulated during processing. The GUI will consume this via
-/// a lock-free channel or atomic pointer.
-#[derive(Debug, Clone)]
-pub struct AnalyzerData {
-    /// The parameters for the global threshold curve.
-    pub curve_params: CurveParams,
-    /// Upwards and downwards threshold offsets for drawing.
-    pub curve_offsets_db: (f32, f32),
-    /// Number of active bins.
-    pub num_bins: usize,
-    /// Per-bin envelope follower magnitudes (linear).
-    pub envelope_followers: Vec<f32>,
-    /// Per-bin gain difference in dB (positive = boost, negative = reduction).
-    pub gain_difference_db: Vec<f32>,
+/// One frame of analyzer data for the spectrum display.
+#[derive(Debug, Clone, Default)]
+pub struct SpectrumSnapshot {
+    /// Input spectrum (envelope follower magnitudes) in dBFS, one entry per
+    /// FFT bin (window_size / 2 + 1).
+    pub magnitudes_db: Vec<f32>,
+    /// The downwards threshold curve in dB, same bin layout — drawn as the
+    /// overlay the user tunes against.
+    pub thresholds_db: Vec<f32>,
+    /// Sample rate at publish time (for the frequency axis).
+    pub sample_rate: f32,
+    /// FFT window size at publish time.
+    pub window_size: usize,
 }
 
-impl AnalyzerData {
-    /// Create a new analyzer data buffer with the given capacity.
-    pub fn new(max_bins: usize) -> Self {
-        Self {
-            curve_params: CurveParams::default(),
-            curve_offsets_db: (0.0, 0.0),
-            num_bins: 0,
-            envelope_followers: vec![0.0; max_bins],
-            gain_difference_db: vec![0.0; max_bins],
+impl SpectrumSnapshot {
+    /// The bin index a frequency maps to, or None when out of range.
+    pub fn bin_for_frequency(&self, freq: f32) -> Option<usize> {
+        if self.window_size == 0 || self.sample_rate <= 0.0 {
+            return None;
         }
+        let bin_width = self.sample_rate / self.window_size as f32;
+        let idx = (freq / bin_width).round() as i64;
+        if idx < 0 {
+            Some(0)
+        } else if (idx as usize) < self.magnitudes_db.len() {
+            Some(idx as usize)
+        } else {
+            None
+        }
+    }
+}
+
+/// Shared holder for the latest snapshot. The audio thread stores a fresh
+/// `Arc` (at display rate, not per block); the GUI clones the `Arc` and draws
+/// without holding the lock.
+#[derive(Clone, Default)]
+pub struct SpectrumView(Arc<Mutex<Arc<SpectrumSnapshot>>>);
+
+impl SpectrumView {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Publish a snapshot (audio thread). Replaces the previous one.
+    pub fn publish(&self, snapshot: SpectrumSnapshot) {
+        *self.0.lock() = Arc::new(snapshot);
+    }
+
+    /// Read the latest snapshot (GUI thread). Returns an owned `Arc` so the
+    /// lock is released immediately.
+    pub fn latest(&self) -> Arc<SpectrumSnapshot> {
+        self.0.lock().clone()
     }
 }

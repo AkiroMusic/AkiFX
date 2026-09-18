@@ -176,6 +176,9 @@ pub struct EditorState {
     /// Output peak meters shared with the audio thread (absolute value).
     pub peak_l: Arc<AtomicF32>,
     pub peak_r: Arc<AtomicF32>,
+    /// Live spectrum handle from the Spectral Compressor module, when
+    /// present (set by `Plugin::editor()`).
+    pub spectrum_view: Option<crate::modules::spectral_compressor::analyzer::SpectrumView>,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +211,7 @@ pub fn create_editor(
     order: SharedOrder,
     peak_l: Arc<AtomicF32>,
     peak_r: Arc<AtomicF32>,
+    spectrum_view: Option<crate::modules::spectral_compressor::analyzer::SpectrumView>,
 ) -> Option<Box<dyn Editor>> {
     let egui_state = EguiState::from_size(DEFAULT_SIZE.0, DEFAULT_SIZE.1);
     // Clone the Arc so the update closure can pass it to ResizableWindow.
@@ -222,6 +226,7 @@ pub fn create_editor(
             selected: 0,
             peak_l,
             peak_r,
+            spectrum_view,
         },
         // build: called once when the editor window is created
         |ctx, _user_state| {
@@ -830,6 +835,13 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
         );
     }
 
+    // Live spectrum + threshold curve for the Spectral Compressor.
+    if entry.id_prefix == "spectral_compressor" {
+        if let Some(view) = state.spectrum_view.as_ref() {
+            render_spectrum_view(ui, view);
+        }
+    }
+
     // Id prefix chip + power toggle + state chip.
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -956,6 +968,103 @@ unsafe fn render_param_widget(ui: &mut egui::Ui, setter: &ParamSetter, param_ptr
         ParamPtr::EnumParam(p) => {
             ui.add(ParamSlider::for_param(&**p, setter))
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spectrum view (Spectral Compressor)
+// ---------------------------------------------------------------------------
+
+/// Draw the live input spectrum with the downwards threshold curve overlaid,
+/// on a logarithmic frequency axis (20 Hz .. Nyquist). This is the tuning
+/// surface for the per-bin compressor: bands above the curve get compressed.
+fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compressor::analyzer::SpectrumView) {
+    const MIN_FREQ: f32 = 20.0;
+    const TOP_DB: f32 = 0.0;
+    const BOTTOM_DB: f32 = -100.0;
+
+    let snapshot = view.latest();
+    if snapshot.magnitudes_db.is_empty() {
+        return; // nothing published yet
+    }
+
+    ui.add_space(6.0);
+    let width = ui.available_width();
+    let height = 140.0;
+    let (rect, _resp) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, 4.0, Color32::BLACK);
+
+    let nyquist = snapshot.sample_rate * 0.5;
+    if snapshot.sample_rate <= 0.0 || nyquist <= MIN_FREQ {
+        return;
+    }
+
+    // Frequency (log) -> normalized x, dB -> normalized y.
+    let log_min = MIN_FREQ.ln();
+    let log_max = nyquist.ln();
+    let x_of = |freq: f32| -> f32 {
+        let t = (freq.max(MIN_FREQ).ln() - log_min) / (log_max - log_min);
+        rect.left() + rect.width() * t.clamp(0.0, 1.0)
+    };
+    let y_of = |db: f32| -> f32 {
+        let t = (db - BOTTOM_DB) / (TOP_DB - BOTTOM_DB);
+        rect.bottom() - rect.height() * t.clamp(0.0, 1.0)
+    };
+
+    // Spectrum fill.
+    let bins = &snapshot.magnitudes_db;
+    let bin_span = |bin: usize| -> (f32, f32) {
+        let width_per_bin = nyquist * 2.0 / snapshot.window_size.max(1) as f32;
+        let f_lo = (bin.max(1) as f32 - 0.5) * width_per_bin;
+        let f_hi = (bin as f32 + 0.5) * width_per_bin;
+        (x_of(f_lo.max(MIN_FREQ)), x_of(f_hi.max(MIN_FREQ)))
+    };
+    for (bin, &db) in bins.iter().enumerate().skip(1) {
+        let (x0, x1) = bin_span(bin);
+        if x1 <= rect.left() || x0 >= rect.right() {
+            continue;
+        }
+        let y = y_of(db);
+        painter.line_segment(
+            [egui::pos2(x0, y), egui::pos2(x1, y)],
+            Stroke::new(1.5, theme::JADE_400),
+        );
+        painter.line_segment(
+            [egui::pos2(x1, y), egui::pos2(x1, rect.bottom())],
+            Stroke::new(0.0, Color32::TRANSPARENT), // anchor for continuity
+        );
+    }
+
+    // Threshold curve overlay (sand).
+    let thresholds = &snapshot.thresholds_db;
+    if !thresholds.is_empty() {
+        let mut points: Vec<egui::Pos2> = Vec::with_capacity(thresholds.len());
+        for (bin, &db) in thresholds.iter().enumerate() {
+            let width_per_bin = nyquist * 2.0 / snapshot.window_size.max(1) as f32;
+            let freq = (bin as f32 + 0.5) * width_per_bin;
+            if freq < MIN_FREQ {
+                continue;
+            }
+            points.push(egui::pos2(x_of(freq), y_of(db)));
+        }
+        if points.len() >= 2 {
+            painter.add(egui::Shape::line(points, Stroke::new(1.5, theme::SAND_400)));
+        }
+    }
+
+    // Frame + octave gridlines.
+    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, theme::CHARCOAL_600), egui::StrokeKind::Inside);
+    for freq in [50.0f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
+        if freq >= nyquist {
+            break;
+        }
+        let x = x_of(freq);
+        painter.line_segment(
+            [egui::pos2(x, rect.top() + 2.0), egui::pos2(x, rect.bottom() - 2.0)],
+            Stroke::new(0.5, Color32::from_rgba_unmultiplied(255, 255, 255, 18)),
+        );
     }
 }
 

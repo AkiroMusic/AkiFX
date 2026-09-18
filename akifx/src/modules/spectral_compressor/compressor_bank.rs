@@ -10,7 +10,7 @@ use realfft::num_complex::Complex32;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::analyzer::AnalyzerData;
+use super::analyzer::SpectrumSnapshot;
 use super::curve::{Curve, CurveParams};
 use super::SpectralCompressorParams;
 
@@ -58,8 +58,6 @@ pub struct CompressorBank {
 
     window_size: usize,
     sample_rate: f32,
-
-    analyzer_data: AnalyzerData,
 }
 
 // ── ThresholdParams ────────────────────────────────────────────────────────
@@ -490,7 +488,6 @@ impl CompressorBank {
             window_size: 0,
             sample_rate: 1.0,
 
-            analyzer_data: AnalyzerData::new(complex_len),
         }
     }
 
@@ -544,9 +541,25 @@ impl CompressorBank {
         }
     }
 
-    /// Get a reference to the analyzer data.
-    pub fn analyzer_data(&self) -> &AnalyzerData {
-        &self.analyzer_data
+    /// Copy the current analysis state into a spectrum snapshot for the GUI:
+    /// the channel's envelope followers (input spectrum) and the downwards
+    /// threshold curve, both in dB.
+    pub fn fill_spectrum_snapshot(&self, channel_idx: usize, out: &mut SpectrumSnapshot) {
+        out.sample_rate = self.sample_rate;
+        out.window_size = self.window_size;
+        let envelopes = self
+            .envelopes
+            .get(channel_idx)
+            .map(|e| e.as_slice())
+            .unwrap_or(&[]);
+        let len = envelopes.len().min(self.downwards_thresholds_db.len());
+        out.magnitudes_db.clear();
+        out.magnitudes_db.reserve(len);
+        for &magnitude in &envelopes[..len] {
+            out.magnitudes_db.push(gain_to_db_fast_epsilon(magnitude));
+        }
+        out.thresholds_db.clear();
+        out.thresholds_db.extend_from_slice(&self.downwards_thresholds_db[..len]);
     }
 
     /// Process the spectral compressor for one channel.

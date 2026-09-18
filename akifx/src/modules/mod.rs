@@ -156,6 +156,13 @@ pub trait AkiFxModule: Send + Sync {
     /// MIDI (e.g., [`MidiInverterModule`]) override this to return their output queue.
     ///
     /// The plugin calls this after each process block to forward events to the host.
+    /// Optional GUI spectrum view handle. Modules with a visualization
+    /// (currently the Spectral Compressor) return their shared snapshot
+    /// holder; the editor polls it each frame.
+    fn spectrum_view(&self) -> Option<crate::modules::spectral_compressor::analyzer::SpectrumView> {
+        None
+    }
+
     fn take_output_midi(&mut self) -> Vec<nih_plug::midi::NoteEvent<()>> {
         Vec::new()
     }

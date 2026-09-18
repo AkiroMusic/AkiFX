@@ -129,6 +129,11 @@ impl Plugin for AkiFx {
         // power toggles actually gate audio processing (Oracle-found bug:
         // build_ui_entries otherwise creates orphan flags).
         gui::state::wire_bypass_flags(&mut entries, self.chain.modules());
+        let spectrum_view = self
+            .chain
+            .modules()
+            .iter()
+            .find_map(|m| m.spectrum_view());
         let (peak_l, peak_r) = self.peak_meters();
         gui::create_editor(
             self.params.clone(),
@@ -136,6 +141,7 @@ impl Plugin for AkiFx {
             self.chain.order().clone(),
             peak_l,
             peak_r,
+            spectrum_view,
         )
     }
 

@@ -65,6 +65,11 @@ const MAX_OVERLAP_TIMES: usize = 1 << MAX_OVERLAP_ORDER;
 
 const NUM_PLANS: usize = MAX_WINDOW_ORDER - MIN_WINDOW_ORDER + 1;
 
+/// How many audio blocks between GUI spectrum publishes (~display rate).
+const PUBLISH_EVERY_N_BLOCKS: usize = 3;
+
+use analyzer::SpectrumSnapshot;
+
 // ── FFT Plan ───────────────────────────────────────────────────────────────
 
 /// Pre-planned FFT algorithms for a specific window size.
@@ -380,6 +385,10 @@ pub struct SpectralCompressorModule {
     dry_wet_mixer: DryWetMixer,
     /// Per-bin compressor bank.
     compressor_bank: CompressorBank,
+    /// GUI spectrum snapshot holder (published at display rate).
+    spectrum_view: crate::modules::spectral_compressor::analyzer::SpectrumView,
+    /// Blocks since the last spectrum publish (throttles to display rate).
+    blocks_since_publish: usize,
 
     /// Per-channel OLA state.
     channels: [ChannelState; 2],
@@ -445,6 +454,8 @@ impl SpectralCompressorModule {
             compressor_bank,
             channels: [ChannelState::new(), ChannelState::new()],
             cached_curve_params: None,
+            spectrum_view: crate::modules::spectral_compressor::analyzer::SpectrumView::new(),
+            blocks_since_publish: 0,
         }
     }
 
@@ -466,6 +477,8 @@ impl SpectralCompressorModule {
             compressor_bank,
             channels: [ChannelState::new(), ChannelState::new()],
             cached_curve_params: None,
+            spectrum_view: crate::modules::spectral_compressor::analyzer::SpectrumView::new(),
+            blocks_since_publish: 0,
         }
     }
 
@@ -666,6 +679,12 @@ impl AkiFxModule for SpectralCompressorModule {
         &self.bypass
     }
 
+    fn spectrum_view(
+        &self,
+    ) -> Option<crate::modules::spectral_compressor::analyzer::SpectrumView> {
+        Some(self.spectrum_view.clone())
+    }
+
     fn initialize(&mut self, sample_rate: f32, max_block_size: usize) {
         self.sample_rate = sample_rate;
         self.max_block_size = self.max_block_size.max(max_block_size);
@@ -773,6 +792,18 @@ impl AkiFxModule for SpectralCompressorModule {
             }
         }
 
+        // Publish the spectrum snapshot at display rate (~30 Hz at 512-sample
+        // blocks / 48 kHz). The audio thread only touches its own scratch
+        // snapshot; the shared holder swap is a short mutex over an Arc.
+        self.blocks_since_publish += 1;
+        if self.blocks_since_publish >= PUBLISH_EVERY_N_BLOCKS {
+            self.blocks_since_publish = 0;
+            let mut snapshot = SpectrumSnapshot::default();
+            self.compressor_bank
+                .fill_spectrum_snapshot(0, &mut snapshot);
+            self.spectrum_view.publish(snapshot);
+        }
+
         // Mix in dry signal with latency compensation. `next_step` advances
         // the smoother by the whole block (as if that many samples had
         // passed), matching upstream's per-sample convergence rate; the old
@@ -840,6 +871,8 @@ mod tests {
             compressor_bank,
             channels: [ChannelState::new(), ChannelState::new()],
             cached_curve_params: None,
+            spectrum_view: crate::modules::spectral_compressor::analyzer::SpectrumView::new(),
+            blocks_since_publish: 0,
         };
         m.initialize(SR, BLOCK);
         m
