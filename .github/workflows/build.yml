@@ -56,15 +56,19 @@ jobs:
             cp -R target/bundled/AkiFX.app release/AkiFX.app
           fi
 
-      - name: Package zip (bsdtar for forward-slash entries)
+      - name: Package zip (python zipfile for forward-slash entries)
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            TAR=/c/Windows/System32/tar.exe
-          else
-            TAR=tar
-          fi
-          "$TAR" -a -c -f "AkiFX-${{ matrix.name }}.zip" release/
+          python - <<'PY'
+          import zipfile, os
+          name = "AkiFX-${{ matrix.name }}.zip"
+          with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as zf:
+              for root, _, files in os.walk("release"):
+                  for f in files:
+                      full = os.path.join(root, f)
+                      zf.write(full, full.replace(os.sep, "/"))
+          print(name, os.path.getsize(name))
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
