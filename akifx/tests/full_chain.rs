@@ -1,6 +1,6 @@
 //! Integration test for the full AkiFX module chain.
 //!
-//! Verifies that all 21 modules are wired correctly, bypass works,
+//! Verifies that all 11 modules are wired correctly, bypass works,
 //! gain works, and the entire active chain produces no NaN.
 
 use akifx::modules::ModuleChain;
@@ -138,8 +138,8 @@ fn latency_sums_non_bypassed_modules() {
         module.set_bypass(false);
     }
 
-    // PubertySimulator has 2048 samples latency — all others are 0.
-    // Latency is the sum of non-bypassed modules (= 2048 in identity order).
+    // The spectral modules each contribute fft (2048) + hop (512) latency;
+    // latency is the sum over non-bypassed modules.
     let latency = chain.latency_samples();
     assert!(
         latency >= 2048,
