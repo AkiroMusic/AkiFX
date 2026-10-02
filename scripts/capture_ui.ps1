@@ -11,6 +11,8 @@ param(
     [Parameter(Mandatory = $true)][string]$ExePath,
     [Parameter(Mandatory = $true)][string]$OutPng,
     [string]$Clicks = "",
+    [string]$DragFrom = "",
+    [string]$DragTo = "",
     [int]$Seconds = 3
 )
 
@@ -87,6 +89,32 @@ try {
 
     Start-Sleep -Seconds $Seconds
 
+    # Mid-drag capture: press at DragFrom, move to DragTo with the button
+    # held, capture while held, then release.
+    if ($DragFrom -ne "" -and $DragTo -ne "") {
+        $f = $DragFrom -split ","
+        $t = $DragTo -split ","
+        $fx = [int]($originX + [double]$f[0] * $scale)
+        $fy = [int]($originY + [double]$f[1] * $scale)
+        $tx = [int]($originX + [double]$t[0] * $scale)
+        $ty = [int]($originY + [double]$t[1] * $scale)
+        [Win32Capture]::SetCursorPos($fx, $fy) | Out-Null
+        Start-Sleep -Milliseconds 400
+        [Win32Capture]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero) # down (grip)
+        Start-Sleep -Milliseconds 350
+        # Jiggle first — egui needs a few px of pressed movement to decide on
+        # a drag, then walk to the target.
+        [Win32Capture]::SetCursorPos($fx + 3, $fy + 3) | Out-Null
+        Start-Sleep -Milliseconds 200
+        foreach ($step in 1..8) {
+            $mx = [int]($fx + 3 + ($tx - $fx) * $step / 8)
+            $my = [int]($fy + 3 + ($ty - $fy) * $step / 8)
+            [Win32Capture]::SetCursorPos($mx, $my) | Out-Null
+            Start-Sleep -Milliseconds 110
+        }
+        Start-Sleep -Milliseconds 600
+    }
+
     # Copy the whole window rect from the composited screen (clicks use the
     # client origin above; the capture includes the OS frame, which the
     # reviewer is told to ignore).
@@ -96,6 +124,11 @@ try {
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($win.Left, $win.Top, 0, 0, (New-Object System.Drawing.Size($winW, $winH)))
     $g.Dispose()
+
+    if ($DragFrom -ne "" -and $DragTo -ne "") {
+        [Win32Capture]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero) # up
+        Start-Sleep -Milliseconds 300
+    }
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutPng) | Out-Null
     $bmp.Save($OutPng, [System.Drawing.Imaging.ImageFormat]::Png)

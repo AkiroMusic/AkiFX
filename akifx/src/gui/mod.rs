@@ -8,8 +8,7 @@
 //! Footer: global bypass, master gain, output meters, latency, zoom, About.
 
 use nih_plug::prelude::*;
-use nih_plug_egui::egui::{self, Color32, CornerRadius, CursorIcon, LayerId, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
-use nih_plug_egui::egui::layers::Order;
+use nih_plug_egui::egui::{self, Color32, CornerRadius, CursorIcon, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use nih_plug_egui::{create_egui_editor, resizable_window::ResizableWindow, EguiState};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -876,19 +875,17 @@ fn render_rack_panel(
                         paint::neon_edge(p, row_rect);
                     }
 
-                    // T6: Lift background — painted AFTER accent, on top
+                    // Lift background — same layer, painted BEFORE the row
+                    // content so the text stays visible while dragging (an
+                    // earlier Foreground-layer fill covered it, leaving a
+                    // blank patch).
                     if is_being_lifted {
-                        let lift_layer = LayerId::new(
-                            Order::Foreground,
-                            ui.layer_id().id,
-                        );
-                        let lift_painter = ui.painter().clone().with_layer_id(lift_layer);
-                        lift_painter.rect_filled(
+                        p.rect_filled(
                             row_rect,
                             CornerRadius::same(8),
-                            pal().surface_2,
+                            theme::mix(pal().surface_2, pal().bg_base, 0.25),
                         );
-                        lift_painter.rect_stroke(
+                        p.rect_stroke(
                             row_rect,
                             CornerRadius::same(8),
                             Stroke::new(1.5, pal().accent),
@@ -896,9 +893,11 @@ fn render_rack_panel(
                         );
                     }
 
-                    // T5: Drop pulse — after release, the landed row fades from lifted to normal.
+                    // Drop pulse — after release the landed row's highlight
+                    // fades out (starts below full opacity so it reads as a
+                    // soft landing, not a patch).
                     if !drag.active && pulse < 0.99 {
-                        let lift_factor = (1.0 - pulse).clamp(0.0, 1.0);
+                        let lift_factor = (1.0 - pulse).clamp(0.0, 1.0) * 0.6;
                         p.rect_filled(
                             row_rect,
                             CornerRadius::same(8),
