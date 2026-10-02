@@ -33,10 +33,15 @@ use theme::pal;
 const DEFAULT_SIZE: (u32, u32) = (1100, 720);
 /// Row height for each rack entry.
 const ROW_HEIGHT: f32 = 34.0;
-/// Top bar height.
+/// Title bar height.
 const TOP_BAR_HEIGHT: f32 = 48.0;
-/// Bottom strip height.
-const BOTTOM_HEIGHT: f32 = 44.0;
+/// Footer height.
+const FOOTER_HEIGHT: f32 = 56.0;
+
+/// Peak-meter display range (dBFS) and per-frame decay.
+const METER_MIN_DB: f32 = -60.0;
+const METER_MAX_DB: f32 = 6.0;
+const METER_DECAY_DB_PER_FRAME: f32 = 1.9;
 
 /// Compute the rack panel width based on total window width.
 ///
@@ -133,6 +138,39 @@ fn param_group_label(name: &str) -> &str {
     name.split('_').next().unwrap_or(name)
 }
 
+/// Truncate a label with an ellipsis so it fits `max_w` pixels at the given
+/// font (rack rows keep name + latency badge on one line).
+fn truncate_to_width(
+    painter: &egui::Painter,
+    text: &str,
+    font: egui::FontId,
+    max_w: f32,
+) -> String {
+    const ELLIPSIS: char = '\u{2026}';
+    if painter
+        .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .x
+        <= max_w
+    {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    for keep in (0..chars.len()).rev() {
+        let mut candidate: String = chars[..keep].iter().collect();
+        candidate.push(ELLIPSIS);
+        if painter
+            .layout_no_wrap(candidate.clone(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+            <= max_w
+        {
+            return candidate;
+        }
+    }
+    ELLIPSIS.to_string()
+}
+
 /// Convert a raw snake_case parameter/field name into human-readable
 /// Title Case: "sine_level" -> "Sine Level", "pms_gain" -> "Pms Gain".
 fn humanize_name(name: &str) -> String {
@@ -179,6 +217,12 @@ pub struct EditorState {
     /// Cached grain-noise texture for the aurora background (lazily built on
     /// the first painted frame).
     pub noise: Option<egui::TextureHandle>,
+    /// Peak-meter display state: shown values decay smoothly in the GUI
+    /// (fast attack from the atomics, slow release).
+    pub meter_db_l: f32,
+    pub meter_db_r: f32,
+    /// Latched overload indicator — stays red until the meter is clicked.
+    pub clip_latched: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -228,11 +272,19 @@ pub fn create_editor(
             peak_r,
             spectrum_view,
             noise: None,
+            meter_db_l: METER_MIN_DB,
+            meter_db_r: METER_MIN_DB,
+            clip_latched: false,
         },
         // build: called once when the editor window is created
         |ctx, _user_state| {
             theme::load_fonts(ctx);
             theme::configure_visuals(ctx);
+            // Seed the star bloom so it plays once on editor open.
+            ctx.memory_mut(|m| {
+                m.data
+                    .insert_temp(egui::Id::new("akifx_star_bloom"), 0.0_f32)
+            });
         },
         // update: called every frame
         move |ctx, setter, user_state| {
@@ -271,49 +323,77 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
     // strip was pushed entirely out of the visible window (user complaint:
     // "界面总是显示不全").
     let total_width = ui.clip_rect().width();
+    let total_height = ui.clip_rect().height();
 
+    // ── Title bar (frosted strip) ─────────────────────────────────────────
+    let (title_rect, _) =
+        ui.allocate_exact_size(Vec2::new(total_width, TOP_BAR_HEIGHT), egui::Sense::hover());
+    paint::frosted_strip(ui.painter(), title_rect);
+    ui.allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(title_rect)
+                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+            |ui| {
+        render_title_bar(ui, state);
+    });
+    ui.add_space(8.0);
 
-    // ── Top bar ──────────────────────────────────────────────────────────
-    render_top_bar(ui, total_width);
-
-    // Exact gap (ui.separator() carries hidden margins that used to push
-    // the bottom strip out of the visible window — "显示不全").
-    ui.add_space(6.0);
-
-    // ── Middle area: rack panel + param panel ────────────────────────────
+    // ── Middle: rack card + module card ───────────────────────────────────
     let rack_w = rack_width(total_width);
-    // Deterministic fit: top(48) + gap(6) + middle + gap(6) + bottom(44) == avail.
-    let middle_height = (ui.available_height() - TOP_BAR_HEIGHT - BOTTOM_HEIGHT - 12.0).max(120.0);
+    // Deterministic fit: title(48) + gap(8) + middle + gap(8) + footer(56).
+    let middle_height = (total_height - TOP_BAR_HEIGHT - FOOTER_HEIGHT - 16.0).max(120.0);
+    let param_width = (total_width - rack_w - 12.0).max(380.0);
     ui.allocate_ui_with_layout(
         Vec2::new(total_width, middle_height),
         egui::Layout::left_to_right(egui::Align::TOP),
         |ui| {
-            // Left rack panel
-            ui.allocate_ui_with_layout(
-                Vec2::new(rack_w, middle_height),
-                egui::Layout::top_down(egui::Align::LEFT),
+            // Rack navigation card
+            let (rack_rect, _) =
+                ui.allocate_exact_size(Vec2::new(rack_w, middle_height), egui::Sense::hover());
+            let rack_content = paint::glass_card(ui.painter(), rack_rect);
+            ui.allocate_new_ui(
+                egui::UiBuilder::new()
+                    .max_rect(rack_content)
+                    .id_salt("akifx_rack_card")
+                    .layout(egui::Layout::top_down(egui::Align::LEFT)),
                 |ui| {
                     render_rack_panel(ui, state, rack_w);
                 },
             );
 
-            ui.separator();
+            ui.add_space(12.0);
 
-            // Right param panel (fills remainder)
-            let param_width = (total_width - rack_w - 4.0).max(380.0);
-            ui.allocate_ui_with_layout(
+            // Module card (fills the remainder)
+            let card_left = rack_rect.right() + 12.0;
+            let card_rect = Rect::from_min_size(
+                Pos2::new(card_left, rack_rect.top()),
                 Vec2::new(param_width, middle_height),
-                egui::Layout::top_down(egui::Align::LEFT),
+            );
+            let card_content = paint::glass_card(ui.painter(), card_rect);
+            ui.allocate_new_ui(
+                egui::UiBuilder::new()
+                    .max_rect(card_content)
+                    .id_salt("akifx_param_card")
+                    .layout(egui::Layout::top_down(egui::Align::LEFT)),
                 |ui| {
                     render_param_panel(ui, setter, state);
                 },
             );
         },
     );
+    ui.add_space(8.0);
 
-    // ── Bottom master strip ──────────────────────────────────────────────
-    ui.add_space(6.0);
-    render_bottom_strip(ui, setter, state, total_width);
+    // ── Footer (frosted strip) ────────────────────────────────────────────
+    let (footer_rect, _) =
+        ui.allocate_exact_size(Vec2::new(total_width, FOOTER_HEIGHT), egui::Sense::hover());
+    paint::frosted_strip(ui.painter(), footer_rect);
+    ui.allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(footer_rect)
+                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+            |ui| {
+        render_footer(ui, setter, state);
+    });
 
     // ── About floating window (rendered last, on top) ────────────────────
     let show_about = ui.memory(|m| m.data.get_temp::<bool>(about_id()).unwrap_or(false));
@@ -376,39 +456,67 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
 }
 
 // ---------------------------------------------------------------------------
-// Top bar
+// Title bar
 // ---------------------------------------------------------------------------
 
-fn render_top_bar(ui: &mut egui::Ui, total_width: f32) {
+fn render_title_bar(ui: &mut egui::Ui, state: &EditorState) {
     let p = pal();
-    ui.allocate_ui_with_layout(
-        Vec2::new(total_width, TOP_BAR_HEIGHT),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            // AkiFX wordmark (Fraunces SemiBold)
-            ui.label(
-                RichText::new("AkiFX")
-                    .font(theme::heading(20.0))
-                    .color(p.text_primary)
-                    .strong(),
-            );
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.add_space(theme::space::S4);
 
-            // Thin divider dot
-            ui.label(
-                RichText::new("\u{00b7}")
-                    .font(theme::mono(14.0))
-                    .color(p.border),
-            );
+        // Signature star with bloom-in animation (seeded at editor open)
+        let star_size = 16.0;
+        let (star_rect, _) =
+            ui.allocate_exact_size(Vec2::new(star_size, star_size), egui::Sense::hover());
+        let bloom = ui
+            .ctx()
+            .animate_value_with_time(egui::Id::new("akifx_star_bloom"), 1.0_f32, 0.45);
+        paint::star(
+            ui.painter(),
+            star_rect.center(),
+            star_size,
+            p.grad_c,
+            bloom,
+            0.0,
+        );
+        if bloom < 0.999 {
+            ui.ctx().request_repaint();
+        }
 
-            // Subtitle
+        ui.add_space(2.0);
+
+        // AkiFX wordmark (Fraunces SemiBold)
+        ui.label(
+            RichText::new("AkiFX")
+                .font(theme::heading(22.0))
+                .color(p.text_primary)
+                .strong(),
+        );
+
+        ui.add_space(6.0);
+
+        // Eyebrow subtitle
+        ui.label(theme::eyebrow("SpectralSuite \u{00d7} NIH-plug suite"));
+
+        // Right cluster: live total latency badge
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(theme::space::S4);
+            let total_latency: u64 = state
+                .entries
+                .iter()
+                .filter(|e| !e.bypass.load(Ordering::Relaxed))
+                .map(|e| e.latency_samples)
+                .sum();
             ui.label(
-                RichText::new("SpectralSuite \u{00d7} NIH-plug suite")
-                    .font(theme::body(11.0))
+                RichText::new(format!("PDC {} smp", total_latency))
+                    .font(theme::mono(11.0))
                     .color(p.text_secondary),
+            )
+            .on_hover_text(
+                "Total processing latency contributed by enabled effects (samples).",
             );
-
-        },
-    );
+        });
+    });
 }
 
 fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
@@ -541,7 +649,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // derives from sel_rect response instead.
                 let row_rect = Rect::from_min_size(
                     ui.cursor().min,
-                    Vec2::new(rack_w - 16.0, ROW_HEIGHT),
+                    Vec2::new(ui.available_width().min(rack_w - 48.0), ROW_HEIGHT),
                 );
                 // Advance layout past the row WITHOUT registering any
                 // interactable (Sense::hover()/click() on this full-row rect
@@ -554,18 +662,16 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     pending_scroll_to_pos = None; // consume once
                 }
 
-                // ── Selected accent bar (left edge, 3px wide) ─────────
+                // ── Selected pill: accent 13% fill + neon edge on top ────
                 {
                     let p = ui.painter();
                     if is_selected {
                         p.rect_filled(
-                            Rect::from_min_size(
-                                Pos2::new(row_rect.left(), row_rect.top()),
-                                Vec2::new(3.0, ROW_HEIGHT),
-                            ),
-                            CornerRadius::ZERO,
-                            theme::with_alpha(pal().accent, 0.4),
+                            row_rect,
+                            CornerRadius::same(theme::radius::SM as u8),
+                            theme::with_alpha(pal().accent, 0.13),
                         );
+                        paint::neon_edge(p, row_rect);
                     }
 
                     // T6: Lift background — painted AFTER accent, on top
@@ -619,7 +725,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // T1: Selection strip (48px..right-8) — also drives is_hovered
                 let sel_zone = Rect::from_min_size(
                     Pos2::new(row_rect.left() + 48.0, row_rect.top()),
-                    Vec2::new((rack_w - 16.0 - 48.0 - 8.0).max(40.0), ROW_HEIGHT),
+                    Vec2::new((rack_w - 48.0 - 48.0 - 8.0).max(40.0), ROW_HEIGHT),
                 );
                 let sel_resp_zone = ui.allocate_rect(sel_zone, egui::Sense::click());
                 let is_hovered = !drag.active && !is_selected && sel_resp_zone.hovered();
@@ -705,25 +811,39 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                         idx_color,
                     );
 
-                    // Module name at x+72 — full brightness always (LED carries state)
-                    p.text(
-                        Pos2::new(row_rect.left() + 72.0, row_rect.top() + ROW_HEIGHT * 0.5),
-                        egui::Align2::LEFT_CENTER,
-                        entry.name,
-                        theme::body(12.0),
-                        pal().text_primary,
-                    );
-
-                    // Latency badge (right-aligned, only if > 0)
-                    if entry.latency_samples > 0 {
+                    // Latency badge (right-aligned, only if > 0); the name
+                    // is truncated below so the two never collide.
+                    let badge_w = if entry.latency_samples > 0 {
+                        let text = format!("{} smp", entry.latency_samples);
+                        let w = p
+                            .layout_no_wrap(text.clone(), theme::mono(9.5), Color32::WHITE)
+                            .size()
+                            .x;
                         p.text(
-                            Pos2::new(row_rect.right() - 12.0, row_rect.top() + ROW_HEIGHT * 0.5),
+                            Pos2::new(row_rect.right() - 10.0, row_rect.top() + ROW_HEIGHT * 0.5),
                             egui::Align2::RIGHT_CENTER,
-                        format!("{} samples", entry.latency_samples),
-                        theme::mono(9.5),
-                        pal().accent_secondary,
+                            text,
+                            theme::mono(9.5),
+                            pal().accent_secondary,
                         );
-                    }
+                        w
+                    } else {
+                        0.0
+                    };
+
+                    // Module name at x+72 — accent when selected (the pill
+                    // carries selection), full brightness otherwise.
+                    let name_x = row_rect.left() + 72.0;
+                    let name_max_w = row_rect.right() - 10.0 - badge_w - 12.0 - name_x;
+                    let name_text =
+                        truncate_to_width(p, entry.name, theme::sans_medium(12.5), name_max_w);
+                    p.text(
+                        Pos2::new(name_x, row_rect.top() + ROW_HEIGHT * 0.5),
+                        egui::Align2::LEFT_CENTER,
+                        name_text,
+                        theme::sans_medium(12.5),
+                        if is_selected { pal().accent } else { pal().text_primary },
+                    );
                 } // drop painter borrow
 
                 // Record row rect for drag hit-testing.
@@ -825,7 +945,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
 // Parameter panel — right side, shows ONLY the selected entry's params
 // ---------------------------------------------------------------------------
 
-fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorState) {
+fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorState) {
     let p = pal();
     // Resolve the selected entry: state.selected is a module index.
     // Find its position in the current processing order.
@@ -867,9 +987,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
 
     // Live spectrum + threshold curve for the Spectral Compressor.
     if entry.id_prefix == "spectral_compressor" {
-        if let Some(view) = state.spectrum_view.as_ref() {
-            render_spectrum_view(ui, view);
-        }
+        render_spectrum_view(ui, state);
     }
 
     // Id prefix chip + power toggle + state chip.
@@ -918,6 +1036,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
             let params: &dyn Params = entry.params.as_ref();
             let mut has_params = false;
             let mut prev_nesting = String::new();
+            let mut last_header: Option<String> = None;
 
             for (name, param_ptr, nesting) in params.param_map() {
                 // Safety: param_ptr comes from param_map() on a valid Params object.
@@ -928,24 +1047,31 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
 
                 has_params = true;
 
-                // T6: Insert group header on nesting change.
+                // Group header on nesting change; remember its text so the
+                // first row's label is not the same word twice.
                 if nesting != prev_nesting {
                     // Entering a deeper group — add separator + label.
                     ui.add_space(4.0);
                     ui.separator();
                     ui.add_space(2.0);
                     let group = param_group_label(&name);
-                    ui.label(theme::eyebrow_raw(&humanize_name(&group)));
+                    last_header = Some(humanize_name(&group));
+                    ui.label(theme::eyebrow_raw(last_header.as_deref().unwrap_or("")));
                     prev_nesting = nesting;
                 }
 
                 ui.add_space(4.0);
                 let name_lower = name.to_lowercase();
-                ui.label(
-                    RichText::new(humanize_name(&name))
-                        .font(theme::body(12.0))
-                        .color(p.text_secondary),
-                );
+                let label_text = humanize_name(&name);
+                if Some(&label_text) != last_header.as_ref() {
+                    ui.label(
+                        RichText::new(label_text)
+                            .font(theme::body(12.0))
+                            .color(p.text_secondary),
+                    );
+                }
+                // Only the first row of a group can share the header's word.
+                last_header = None;
 
                 // Safety: param_ptr is valid — it comes from param_map() on a valid Params.
                 let resp = unsafe {
@@ -965,6 +1091,9 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
                         .color(p.text_tertiary),
                 );
             }
+            // Breathing room at the end of the scroll so the last row never
+            // sits flush against the card's inner bezel.
+            ui.add_space(theme::space::S6);
         });
 }
 
@@ -1027,33 +1156,42 @@ unsafe fn render_param_widget(ui: &mut egui::Ui, setter: &ParamSetter, param_ptr
 // ---------------------------------------------------------------------------
 
 /// Draw the live input spectrum with the downwards threshold curve overlaid,
-/// on a logarithmic frequency axis (20 Hz .. Nyquist). This is the tuning
-/// surface for the per-bin compressor: bands above the curve get compressed.
-fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compressor::analyzer::SpectrumView) {
+/// on a logarithmic frequency axis (20 Hz .. Nyquist), on a contrast panel
+/// with a market-EQ style grid: labeled 100/1k/10k columns, faint octave
+/// columns, and dB rows every 20 dB. This is the tuning surface for the
+/// per-bin compressor: bands above the curve get compressed.
+fn render_spectrum_view(ui: &mut egui::Ui, state: &EditorState) {
     const MIN_FREQ: f32 = 20.0;
     const TOP_DB: f32 = 0.0;
     const BOTTOM_DB: f32 = -100.0;
+    /// Path thinning cap (design budget: ≤420 points).
+    const MAX_POINTS: usize = 420;
 
+    let Some(view) = state.spectrum_view.as_ref() else {
+        return;
+    };
     let snapshot = view.latest();
     if snapshot.magnitudes_db.is_empty() {
         return; // nothing published yet
     }
 
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     let width = ui.available_width();
-    let height = 140.0;
+    let height = 150.0;
     let (rect, _resp) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    let on_contrast = theme::with_alpha(pal().text_on_contrast, 0.08);
+    let p = pal();
+    let on_contrast = theme::with_alpha(p.text_on_contrast, 0.08);
 
-    painter.rect_filled(rect, 4.0, pal().surface_contrast);
+    // Contrast panel (visual anchor per §11.3)
+    painter.rect_filled(rect, theme::radius::MD, p.surface_contrast);
 
     let nyquist = snapshot.sample_rate * 0.5;
     if snapshot.sample_rate <= 0.0 || nyquist <= MIN_FREQ {
         return;
     }
 
-    // Frequency (log) -> normalized x, dB -> normalized y.
+    // Frequency (log) -> x, dB -> y.
     let log_min = MIN_FREQ.ln();
     let log_max = nyquist.ln();
     let x_of = |freq: f32| -> f32 {
@@ -1065,241 +1203,447 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
         rect.bottom() - rect.height() * t.clamp(0.0, 1.0)
     };
 
-    // Spectrum line (cold ramp color).
-    let bins = &snapshot.magnitudes_db;
-    let bin_span = |bin: usize| -> (f32, f32) {
-        let width_per_bin = nyquist * 2.0 / snapshot.window_size.max(1) as f32;
-        let f_lo = (bin.max(1) as f32 - 0.5) * width_per_bin;
-        let f_hi = (bin as f32 + 0.5) * width_per_bin;
-        (x_of(f_lo.max(MIN_FREQ)), x_of(f_hi.max(MIN_FREQ)))
-    };
-    for (bin, &db) in bins.iter().enumerate().skip(1) {
-        let (x0, x1) = bin_span(bin);
-        if x1 <= rect.left() || x0 >= rect.right() {
+    // Silence gate: skip curve tessellation while the last two frames were
+    // silent (grid + legend still render once). State lives in egui frame
+    // memory so this stays a shared-borrow function.
+    let frame_max = snapshot
+        .magnitudes_db
+        .iter()
+        .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    let silent = frame_max < BOTTOM_DB + 1.0;
+    let silent_flag_id = egui::Id::new("akifx_spectrum_silent");
+    let was_silent = ui.memory(|m| m.data.get_temp::<bool>(silent_flag_id).unwrap_or(false));
+    let redraw_curves = !(silent && was_silent);
+    ui.memory_mut(|m| m.data.insert_temp(silent_flag_id, silent));
+
+    // ── Grid ─────────────────────────────────────────────────────────────
+    let label_font = theme::mono(9.0);
+    for &freq in &[100.0f32, 1000.0, 10000.0] {
+        if freq >= nyquist {
             continue;
         }
-        let y = y_of(db);
+        let x = x_of(freq);
+        // Bold labeled columns
         painter.line_segment(
-            [egui::pos2(x0, y), egui::pos2(x1, y)],
-            Stroke::new(1.5, pal().grad_b),
+            [egui::pos2(x, rect.top() + 14.0), egui::pos2(x, rect.bottom() - 14.0)],
+            Stroke::new(1.0, theme::with_alpha(p.text_on_contrast, 0.22)),
         );
-        painter.line_segment(
-            [egui::pos2(x1, y), egui::pos2(x1, rect.bottom())],
-            Stroke::new(0.0, Color32::TRANSPARENT), // anchor for continuity
+        let text = if freq >= 1000.0 {
+            format!("{}k", freq / 1000.0)
+        } else {
+            format!("{}", freq)
+        };
+        painter.text(
+            egui::pos2(x + 3.0, rect.bottom() - 8.0),
+            egui::Align2::LEFT_CENTER,
+            text,
+            label_font.clone(),
+            theme::with_alpha(p.text_on_contrast, 0.45),
         );
     }
+    for decade in [10.0f32, 100.0, 1000.0, 10000.0] {
+        for mult in [2.0f32, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0] {
+            let freq = decade * mult;
+            if freq < MIN_FREQ || freq >= nyquist || freq == 100.0 || freq == 1000.0 || freq == 10000.0 {
+                continue;
+            }
+            let x = x_of(freq);
+            painter.line_segment(
+                [egui::pos2(x, rect.top() + 14.0), egui::pos2(x, rect.bottom() - 14.0)],
+                Stroke::new(0.5, on_contrast),
+            );
+        }
+    }
+    // dB rows every 20 dB
+    for db in [-20.0f32, -40.0, -60.0, -80.0] {
+        let y = y_of(db);
+        painter.line_segment(
+            [egui::pos2(rect.left() + 4.0, y), egui::pos2(rect.right() - 4.0, y)],
+            Stroke::new(0.5, on_contrast),
+        );
+        painter.text(
+            egui::pos2(rect.left() + 6.0, y - 1.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{}", db as i32),
+            label_font.clone(),
+            theme::with_alpha(p.text_on_contrast, 0.35),
+        );
+    }
+    // 0 dB top reference (emphasized)
+    painter.line_segment(
+        [egui::pos2(rect.left() + 4.0, rect.top() + 3.0), egui::pos2(rect.right() - 4.0, rect.top() + 3.0)],
+        Stroke::new(1.0, theme::with_alpha(p.text_on_contrast, 0.30)),
+    );
 
-    // Threshold curve overlay (warm accent).
-    let thresholds = &snapshot.thresholds_db;
-    if !thresholds.is_empty() {
-        let mut points: Vec<egui::Pos2> = Vec::with_capacity(thresholds.len());
-        for (bin, &db) in thresholds.iter().enumerate() {
-            let width_per_bin = nyquist * 2.0 / snapshot.window_size.max(1) as f32;
+    // ── Curves (per-pixel-column max pooling, ≤420 points) ───────────────
+    if redraw_curves {
+        let bins = &snapshot.magnitudes_db;
+        let width_per_bin = nyquist * 2.0 / snapshot.window_size.max(1) as f32;
+        let n_cols = ((rect.width() as usize).min(MAX_POINTS)).max(2);
+        let mut pooled: Vec<f32> = vec![BOTTOM_DB; n_cols];
+        for (bin, &db) in bins.iter().enumerate().skip(1) {
             let freq = (bin as f32 + 0.5) * width_per_bin;
             if freq < MIN_FREQ {
                 continue;
             }
-            points.push(egui::pos2(x_of(freq), y_of(db)));
+            let col = (((x_of(freq) - rect.left()) / rect.width()) * n_cols as f32) as usize;
+            if let Some(slot) = pooled.get_mut(col.min(n_cols - 1)) {
+                if db > *slot {
+                    *slot = db;
+                }
+            }
         }
+
+        // Filled area under the spectrum: vertical ramp fade (grad_b 35% at
+        // the curve → transparent at the bottom).
+        let mut mesh = egui::Mesh::default();
+        let base_y = rect.bottom() - 1.0;
+        for (col, &db) in pooled.iter().enumerate() {
+            let x = rect.left() + (col as f32 + 0.5) / n_cols as f32 * rect.width();
+            let y = y_of(db.max(BOTTOM_DB));
+            mesh.colored_vertex(egui::pos2(x, y), theme::with_alpha(p.grad_b, 0.35));
+            mesh.colored_vertex(egui::pos2(x, base_y), theme::with_alpha(p.grad_b, 0.0));
+        }
+        for col in 0..(n_cols - 1) {
+            let a = (col * 2) as u32;
+            let b = a + 1;
+            let c = a + 2;
+            let d = a + 3;
+            mesh.indices.push(a);
+            mesh.indices.push(b);
+            mesh.indices.push(c);
+            mesh.indices.push(c);
+            mesh.indices.push(b);
+            mesh.indices.push(d);
+        }
+        painter.add(egui::Shape::mesh(mesh));
+
+        // Spectrum stroke on top of the fill
+        let points: Vec<egui::Pos2> = pooled
+            .iter()
+            .enumerate()
+            .map(|(col, &db)| {
+                let x = rect.left() + (col as f32 + 0.5) / n_cols as f32 * rect.width();
+                egui::pos2(x, y_of(db.max(BOTTOM_DB)))
+            })
+            .collect();
         if points.len() >= 2 {
-            painter.add(egui::Shape::line(points, Stroke::new(1.5, pal().accent_tertiary)));
+            painter.add(egui::Shape::line(points, Stroke::new(1.5, p.grad_b)));
         }
+
+        // Threshold curve overlay (warm accent), same pooling
+        let thresholds = &snapshot.thresholds_db;
+        if !thresholds.is_empty() {
+            let mut pooled_t: Vec<f32> = vec![0.0; n_cols];
+            let mut filled: Vec<bool> = vec![false; n_cols];
+            for (bin, &db) in thresholds.iter().enumerate() {
+                let freq = (bin as f32 + 0.5) * width_per_bin;
+                if freq < MIN_FREQ {
+                    continue;
+                }
+                let col = (((x_of(freq) - rect.left()) / rect.width()) * n_cols as f32) as usize;
+                if col < n_cols {
+                    if !filled[col] || db > pooled_t[col] {
+                        pooled_t[col] = db;
+                        filled[col] = true;
+                    }
+                }
+            }
+            let t_points: Vec<egui::Pos2> = pooled_t
+                .iter()
+                .enumerate()
+                .filter(|(col, _)| filled[*col])
+                .map(|(col, &db)| {
+                    let x = rect.left() + (col as f32 + 0.5) / n_cols as f32 * rect.width();
+                    egui::pos2(x, y_of(db.clamp(BOTTOM_DB, TOP_DB)))
+                })
+                .collect();
+            if t_points.len() >= 2 {
+                painter.add(egui::Shape::line(t_points, Stroke::new(1.5, p.accent_tertiary)));
+            }
+        }
+    } else {
+        // Keep repainting occasionally so the gate releases as soon as audio
+        // returns (the analyzer republishes every few blocks).
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
 
-    // Frame + octave gridlines.
-    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, on_contrast), egui::StrokeKind::Inside);
-    for freq in [50.0f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
-        if freq >= nyquist {
-            break;
-        }
-        let x = x_of(freq);
-        painter.line_segment(
-            [egui::pos2(x, rect.top() + 2.0), egui::pos2(x, rect.bottom() - 2.0)],
-            Stroke::new(0.5, on_contrast),
-        );
-    }
+    // ── Legend + neon edge ───────────────────────────────────────────────
+    paint::neon_edge(ui.painter(), rect);
+    let legend_y = rect.top() + 9.0;
+    // Right-aligned text so the labels never clip against the panel edge.
+    painter.text(
+        egui::pos2(rect.right() - 12.0, legend_y),
+        egui::Align2::RIGHT_CENTER,
+        "THRESHOLD",
+        label_font.clone(),
+        theme::with_alpha(p.text_on_contrast, 0.55),
+    );
+    painter.circle_filled(egui::pos2(rect.right() - 78.0, legend_y), 3.0, p.accent_tertiary);
+    painter.text(
+        egui::pos2(rect.right() - 86.0, legend_y),
+        egui::Align2::RIGHT_CENTER,
+        "SPECTRUM",
+        label_font.clone(),
+        theme::with_alpha(p.text_on_contrast, 0.55),
+    );
+    painter.circle_filled(egui::pos2(rect.right() - 152.0, legend_y), 3.0, p.grad_b);
+
+    // Frame
+    painter.rect_stroke(
+        rect,
+        theme::radius::MD,
+        Stroke::new(1.0, on_contrast),
+        egui::StrokeKind::Inside,
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Peak meters
 // ---------------------------------------------------------------------------
 
-/// Draw a compact L/R peak meter pair. Values are absolute sample peaks read
-/// from the audio thread's atomics; the bars show a linear 0..1 scale with
-/// the numeric dBFS of the current peak.
-fn meter_pair(ui: &mut egui::Ui, state: &EditorState) {
+/// Draw the L/R output peak meters on a dB-linear scale (−60…+6 dBFS, 0 dB
+/// reference line, red over-0 segment, latched clip bar). Peaks come from the
+/// audio thread's atomics; the shown value attacks instantly and decays
+/// smoothly in the GUI. Click the meter to clear the clip latch.
+fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
     let p = pal();
-    let peak_l = state.peak_l.load(Ordering::Relaxed);
-    let peak_r = state.peak_r.load(Ordering::Relaxed);
+    let peaks = [state.peak_l.load(Ordering::Relaxed), state.peak_r.load(Ordering::Relaxed)];
+    let shown = [state.meter_db_l, state.meter_db_r];
 
-    let (rect, _resp) = ui.allocate_exact_size(Vec2::new(96.0, 20.0), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, theme::with_alpha(p.text_primary, 0.06));
-
-    let to_x = |v: f32| rect.left() + rect.width() * v.clamp(0.0, 1.0);
-    for (i, peak) in [peak_l, peak_r].iter().enumerate() {
-        let y = rect.top() + 2.0 + i as f32 * 9.0;
-        let h = 7.0f32;
-        let track = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + 2.0, y),
-            Vec2::new(rect.width() - 4.0, h),
-        );
-        let fill_end = to_x(peak.min(1.0));
-        let color = if *peak > 1.0 { p.error } else { p.grad_b };
-        let fill = egui::Rect::from_min_size(
-            track.min,
-            Vec2::new((fill_end - track.left()).max(0.0), h),
-        );
-        painter.rect_filled(track, 2.0, p.surface_contrast);
-        painter.rect_filled(fill, 2.0, color);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(210.0, 36.0), egui::Sense::click());
+    if resp.clicked() {
+        state.clip_latched = false;
     }
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
 
-    let db = |v: f32| -> String {
-        if v <= 1.0e-5 {
-            "-\u{221e}".to_owned() // minus infinity
+    // Update decay state (fast attack, fixed per-frame release).
+    for (i, peak) in peaks.iter().enumerate() {
+        let target_db = if *peak <= 1.0e-5 {
+            METER_MIN_DB
         } else {
-            format!("{:+.1}", 20.0 * v.log10())
+            (20.0 * peak.log10()).clamp(METER_MIN_DB, METER_MAX_DB)
+        };
+        let next = if target_db > shown[i] {
+            target_db
+        } else {
+            (shown[i] - METER_DECAY_DB_PER_FRAME).max(target_db)
+        };
+        if i == 0 {
+            state.meter_db_l = next;
+        } else {
+            state.meter_db_r = next;
         }
+    }
+    if peaks[0] > 1.0 || peaks[1] > 1.0 {
+        state.clip_latched = true;
+    }
+
+    let painter = ui.painter_at(rect);
+    let db_x = |db: f32| -> f32 {
+        let t = (db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB);
+        rect.left() + 22.0 + t.clamp(0.0, 1.0) * (rect.width() - 22.0 - 44.0)
     };
-    ui.label(
-        RichText::new(format!("L {} / R {} dBFS", db(peak_l), db(peak_r)))
-            .font(theme::mono(9.5))
-            .color(p.text_secondary),
-    )
-    .on_hover_text("Output peaks after processing (before Safety Limiter guard).");
+
+    for i in 0..2 {
+        let bar_db = if i == 0 { state.meter_db_l } else { state.meter_db_r };
+        let y = rect.top() + 5.0 + i as f32 * 13.0;
+        let h = 9.0f32;
+        let track = Rect::from_min_max(
+            Pos2::new(db_x(METER_MIN_DB), y),
+            Pos2::new(db_x(METER_MAX_DB), y + h),
+        );
+
+        // Track
+        painter.rect_filled(track, 2.0, p.surface_contrast);
+
+        // Fill up to the shown level: ramp gradient below 0 dB, red above.
+        let shown_x = db_x(bar_db);
+        if shown_x > track.left() + 0.5 {
+            let zero_x = db_x(0.0);
+            let fill_clip = Rect::from_min_max(
+                track.min,
+                Pos2::new(shown_x.min(zero_x).max(track.left()), track.bottom()),
+            );
+            if fill_clip.width() > 0.5 {
+                let clip_painter = painter.clone().with_clip_rect(fill_clip);
+                paint::gradient_band(&clip_painter, track, p.grad_a, p.grad_b);
+            }
+            if bar_db > 0.0 && shown_x > zero_x {
+                let hot = Rect::from_min_max(Pos2::new(zero_x, y), Pos2::new(shown_x, y + h));
+                painter.rect_filled(hot, 2.0, p.error);
+            }
+        }
+
+        // Channel letter + numeric readout
+        painter.text(
+            Pos2::new(rect.left() + 8.0, y + h * 0.5),
+            egui::Align2::LEFT_CENTER,
+            if i == 0 { "L" } else { "R" },
+            theme::mono_medium(9.5),
+            p.text_secondary,
+        );
+        let db_text = if bar_db <= METER_MIN_DB + 0.5 {
+            "-\u{221e}".to_owned()
+        } else {
+            format!("{:+.1}", bar_db)
+        };
+        painter.text(
+            Pos2::new(track.right() + 6.0, y + h * 0.5),
+            egui::Align2::LEFT_CENTER,
+            db_text,
+            theme::mono(9.5),
+            p.text_secondary,
+        );
+    }
+
+    // 0 dB reference line (drawn after bars so it stays visible)
+    let zero_x = db_x(0.0);
+    painter.line_segment(
+        [Pos2::new(zero_x, rect.top() + 4.0), Pos2::new(zero_x, rect.bottom() - 4.0)],
+        Stroke::new(1.0, theme::with_alpha(p.text_primary, 0.30)),
+    );
+    painter.text(
+        Pos2::new(zero_x, rect.top() + 2.5),
+        egui::Align2::CENTER_BOTTOM,
+        "0",
+        theme::mono(8.5),
+        theme::with_alpha(p.text_primary, 0.35),
+    );
+
+    // Latched clip bar across the top
+    if state.clip_latched {
+        let clip_rect = Rect::from_min_max(
+            Pos2::new(rect.left() + 22.0, rect.top() + 0.5),
+            Pos2::new(rect.right() - 44.0, rect.top() + 2.5),
+        );
+        painter.rect_filled(clip_rect, 1.0, p.error);
+    }
+
+    resp.on_hover_text(
+        "Output peaks after processing (dBFS, \u{2212}60\u{2026}+6). Click to clear the clip indicator.",
+    );
 }
 
 // ---------------------------------------------------------------------------
-// Bottom master strip
+// Footer
 // ---------------------------------------------------------------------------
 
-fn render_bottom_strip(
-    ui: &mut egui::Ui,
-    setter: &ParamSetter,
-    state: &EditorState,
-    total_width: f32,
-) {
-    ui.allocate_ui_with_layout(
-        Vec2::new(total_width, BOTTOM_HEIGHT),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            let p = pal();
-            // MASTER section label
-            ui.label(theme::eyebrow("Master"));
-            ui.add_space(8.0);
+fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorState) {
+    let p = pal();
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.add_space(theme::space::S4);
 
-            // Global bypass: one button for the whole chain (bit-identical
-            // passthrough, automatable by the host).
-            let bypassed = state.params.global_bypass.value();
-            let (bp_text, bp_text_color, bp_fill, bp_stroke) = if bypassed {
-                (
-                    "GLOBAL BYPASS: ON",
-                    p.warning,
-                    theme::with_alpha(p.warning, 0.12),
-                    p.warning,
-                )
+        ui.label(theme::eyebrow("Master"));
+        ui.add_space(theme::space::S3);
+
+        // Global bypass: one control for the whole chain (bit-identical
+        // passthrough, automatable by the host). Engaged = warning tint plus
+        // the single shimmer edge on screen (the chain is "alive but
+        // muted").
+        let bypassed = state.params.global_bypass.value();
+        let (bp_rect, bp_resp) =
+            ui.allocate_exact_size(Vec2::new(158.0, 28.0), egui::Sense::click());
+        let bp_painter = ui.painter_at(bp_rect);
+        bp_painter.rect_filled(
+            bp_rect,
+            theme::radius::SM,
+            if bypassed {
+                theme::with_alpha(p.warning, 0.12)
             } else {
-                (
-                    "GLOBAL BYPASS: OFF",
-                    p.text_primary,
-                    Color32::TRANSPARENT,
-                    p.border,
-                )
-            };
-            let bp_btn = ui.add(
+                Color32::TRANSPARENT
+            },
+        );
+        bp_painter.rect_stroke(
+            bp_rect,
+            theme::radius::SM,
+            Stroke::new(
+                1.0,
+                if bypassed { p.warning } else { p.border },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        if bypassed {
+            let phase = (ui.input(|i| i.time) % 5.0) / 5.0;
+            paint::shimmer_edge(&bp_painter, bp_rect, phase as f32);
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(33));
+        }
+        bp_painter.text(
+            bp_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if bypassed { "GLOBAL BYPASS \u{00b7} ON" } else { "GLOBAL BYPASS \u{00b7} OFF" },
+            theme::mono_medium(11.0),
+            if bypassed { p.warning } else { p.text_primary },
+        );
+        if bp_resp
+            .on_hover_text("Bypass the entire chain (bit-identical passthrough). Automatable.")
+            .clicked()
+        {
+            setter.begin_set_parameter(&state.params.global_bypass);
+            setter.set_parameter(&state.params.global_bypass, !bypassed);
+            setter.end_set_parameter(&state.params.global_bypass);
+            ui.ctx().request_repaint();
+        }
+
+        ui.add_space(theme::space::S4);
+
+        // Master gain slider (same Aki slider as the param panel)
+        ui.allocate_ui_with_layout(
+            Vec2::new(230.0, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let gain_resp = widgets::float_slider(ui, setter, &state.params.gain.gain);
+                gain_resp.on_hover_text("Master output gain");
+            },
+        );
+
+        ui.add_space(theme::space::S4);
+
+        // Stereo output peak meters (fed by the audio thread's atomics).
+        meter_pair(ui, state);
+
+        // Right-aligned cluster: UI zoom cycle, About.
+        // (Parent scope — the only interactable zone verified reliable.)
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(theme::space::S4);
+
+            // About ghost button
+            let about_btn = ui.add(
                 egui::Button::new(
-                    RichText::new(bp_text)
-                        .font(theme::mono_medium(11.0))
-                        .color(bp_text_color),
+                    RichText::new("About").font(theme::body(11.0)).color(p.text_secondary),
                 )
-                .fill(bp_fill)
-                .stroke(Stroke::new(1.0, bp_stroke)),
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::new(1.0, p.border)),
             );
-            if bp_btn
-                .on_hover_text("Bypass the entire chain (bit-identical passthrough). Automatable.")
-                .clicked()
-            {
-                setter.set_parameter(&state.params.global_bypass, !bypassed);
-                ui.ctx().request_repaint();
+            if about_btn.on_hover_text("About AkiFX").clicked() {
+                let current = ui
+                    .memory(|m| m.data.get_temp::<bool>(about_id()).unwrap_or(false));
+                ui.memory_mut(|m| m.data.insert_temp(about_id(), !current));
             }
 
-            ui.add_space(12.0);
+            ui.add_space(10.0);
 
-            // Master gain slider (same Aki slider as the param panel)
-            ui.allocate_ui_with_layout(
-                Vec2::new(220.0, 24.0),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    let gain_resp = widgets::float_slider(ui, setter, &state.params.gain.gain);
-                    gain_resp.on_hover_text("Master output gain");
-                },
-            );
-
-            ui.add_space(12.0);
-
-            // Stereo output peak meters (fed by the audio thread's atomics).
-            meter_pair(ui, state);
-
-            // Right-aligned cluster: live latency, UI zoom cycle, About.
-            // (Parent scope — the only interactable zone verified reliable.)
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // About ghost button
-                let about_btn = ui.add(
-                    egui::Button::new(
-                        RichText::new("About").font(theme::body(11.0)).color(p.text_secondary),
-                    )
-                    .fill(Color32::TRANSPARENT)
-                    .stroke(Stroke::new(1.0, p.border)),
-                );
-                if about_btn.on_hover_text("About AkiFX").clicked() {
-                    let current = ui
-                        .memory(|m| m.data.get_temp::<bool>(about_id()).unwrap_or(false));
-                    ui.memory_mut(|m| m.data.insert_temp(about_id(), !current));
-                }
-
-                ui.add_space(10.0);
-
-                // UI zoom cycle button (60 -> 80 -> 100 -> 125 -> 150 -> 200)
-                let z = *state.params.ui_zoom.lock();
-                let zoom_btn = ui.add(
-                    egui::Button::new(
-                        RichText::new(format!("{:.0}%", z * 100.0))
-                            .font(theme::mono_medium(11.0))
-                            .color(p.text_secondary),
-                    )
-                    .fill(theme::with_alpha(p.text_primary, 0.06))
-                    .stroke(Stroke::new(1.0, p.border))
-                    .min_size(Vec2::new(56.0, 22.0)),
-                );
-                if zoom_btn
-                    .on_hover_text("UI zoom \u{2014} click to cycle 60\u{2013}200%")
-                    .clicked()
-                {
-                    *state.params.ui_zoom.lock() = zoom_step(z, 1);
-                    ui.ctx().request_repaint();
-                }
-
-                ui.add_space(10.0);
-
-                // Live total latency = SUM of non-bypassed entries
-                let total_latency: u64 = state
-                    .entries
-                    .iter()
-                    .filter(|e| !e.bypass.load(Ordering::Relaxed))
-                    .map(|e| e.latency_samples)
-                    .sum();
-                ui.label(
-                    RichText::new(format!("Latency: {} samples", total_latency))
-                        .font(theme::mono(11.0))
+            // UI zoom cycle button (60 -> 80 -> 100 -> 125 -> 150 -> 200)
+            let z = *state.params.ui_zoom.lock();
+            let zoom_btn = ui.add(
+                egui::Button::new(
+                    RichText::new(format!("{:.0}%", z * 100.0))
+                        .font(theme::mono_medium(11.0))
                         .color(p.text_secondary),
                 )
-                .on_hover_text(
-                    "Total processing latency contributed by enabled effects (samples).",
-                );
-            });
-        },
-    );
+                .fill(theme::with_alpha(p.text_primary, 0.06))
+                .stroke(Stroke::new(1.0, p.border))
+                .min_size(Vec2::new(56.0, 22.0)),
+            );
+            if zoom_btn
+                .on_hover_text("UI zoom \u{2014} click to cycle 60\u{2013}200%")
+                .clicked()
+            {
+                *state.params.ui_zoom.lock() = zoom_step(z, 1);
+                ui.ctx().request_repaint();
+            }
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------

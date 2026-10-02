@@ -8,7 +8,7 @@
 use crate::gui::paint;
 use crate::gui::theme::{self, radius};
 use nih_plug::prelude::{FloatParam, IntParam, Param};
-use nih_plug_egui::egui::{self, Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use nih_plug_egui::egui::{self, Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use nih_plug::prelude::ParamSetter;
 
 /// Width of the monospace value readout on the right of a slider row.
