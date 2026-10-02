@@ -29,8 +29,26 @@ use theme::pal;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Default window dimensions (width, height).
-const DEFAULT_SIZE: (u32, u32) = (1280, 800);
+/// Default window dimensions in design points (width, height). The physical
+/// window is this multiplied by the system display scale — baseview presents
+/// at one physical pixel per point, so the DPI factor must be applied here
+/// as well as to the type sizes.
+const DEFAULT_SIZE: (f32, f32) = (1280.0, 800.0);
+/// Smallest usable editor size in design points.
+const MIN_SIZE: (f32, f32) = (1040.0, 680.0);
+
+/// The system display scale (1.0 on unscaled displays).
+fn dpi() -> f32 {
+    theme::system_scale_factor()
+}
+
+/// Default window size in physical pixels.
+fn default_window_size() -> (u32, u32) {
+    (
+        (DEFAULT_SIZE.0 * dpi()).round() as u32,
+        (DEFAULT_SIZE.1 * dpi()).round() as u32,
+    )
+}
 /// Row height for each rack entry.
 const ROW_HEIGHT: f32 = 40.0;
 /// Title bar height.
@@ -97,19 +115,25 @@ fn next_rack_position(cur_pos: usize, count: usize, key: egui::Key) -> usize {
 // T6: Zoom step helper
 // ---------------------------------------------------------------------------
 
-/// Discrete zoom steps (percent expressed as multiplier).
+/// Discrete zoom steps (percent expressed as multiplier). 0.0 = AUTO
+/// (follow the system display scale) sits below the list: stepping down from
+/// the smallest step wraps into AUTO.
 const ZOOM_STEPS: &[f32] = &[0.6, 0.8, 1.0, 1.25, 1.5, 2.0];
+const ZOOM_AUTO: f32 = 0.0;
 
-/// Compute the next zoom level by stepping through [`ZOOM_STEPS`].
+/// Compute the next zoom level by stepping through [`ZOOM_STEPS`], with
+/// [`ZOOM_AUTO`] (0.0) as the smallest setting.
 ///
 /// `direction`: +1 = zoom in (larger), -1 = zoom out (smaller).
-/// If `cur` doesn't match any step, the nearest step is used as the starting
-/// point. Clamps at the first/last step.
 fn zoom_step(cur: f32, direction: i32) -> f32 {
-    if ZOOM_STEPS.is_empty() || direction == 0 {
+    if direction == 0 {
         return cur;
     }
-    // Find the index of the nearest step to `cur`.
+    if cur <= ZOOM_AUTO + 0.01 {
+        // AUTO steps up into the first list entry; stepping down from AUTO
+        // stays in AUTO.
+        return if direction > 0 { ZOOM_STEPS[0] } else { ZOOM_AUTO };
+    }
     let nearest = ZOOM_STEPS
         .iter()
         .enumerate()
@@ -120,10 +144,14 @@ fn zoom_step(cur: f32, direction: i32) -> f32 {
         })
         .map(|(i, _)| i)
         .unwrap_or(0);
-    let next = (nearest as isize + direction as isize)
-        .max(0)
-        .min(ZOOM_STEPS.len() as isize - 1) as usize;
-    ZOOM_STEPS[next]
+    let next = (nearest as isize + direction as isize) as usize;
+    if next >= ZOOM_STEPS.len() {
+        // Stepping up past the largest step wraps into AUTO (so AUTO is
+        // always reachable).
+        ZOOM_AUTO
+    } else {
+        ZOOM_STEPS[next]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -259,8 +287,8 @@ pub fn create_editor(
     peak_r: Arc<AtomicF32>,
     spectrum_view: Option<crate::modules::spectral_compressor::analyzer::SpectrumView>,
 ) -> Option<Box<dyn Editor>> {
-    let egui_state = EguiState::from_size(DEFAULT_SIZE.0, DEFAULT_SIZE.1);
-    // Clone the Arc so the update closure can pass it to ResizableWindow.
+    let egui_state = EguiState::from_size(default_window_size().0, default_window_size().1);
+    // Clone the Arc so the update closure can drive the resize corner.
     let egui_state_for_resize = egui_state.clone();
 
     create_egui_editor(
@@ -296,14 +324,20 @@ pub fn create_editor(
             // which always presents at the system scale factor; scaling is
             // therefore implemented at the theme font-size level instead.)
             let z = *user_state.params.ui_zoom.lock();
-            let z_pct = (z * 100.0).round() as u32;
+            // 0.0 = AUTO: follow the system display scale (baseview does not
+            // apply DPI scaling to the egui renderer on Windows).
+            let effective = if z <= 0.01 { theme::system_scale_factor() } else { z };
+            let z_pct = (effective * 100.0).round() as u32;
             if theme::font_zoom_pct() != z_pct {
                 theme::set_font_zoom_pct(z_pct);
                 theme::apply_text_styles(ctx);
             }
 
             ResizableWindow::new("akifx_resize")
-                .min_size(Vec2::new(1040.0, 680.0))
+                .min_size(Vec2::new(
+                    MIN_SIZE.0 * theme::system_scale_factor(),
+                    MIN_SIZE.1 * theme::system_scale_factor(),
+                ))
                 .show(ctx, egui_state_for_resize.as_ref(), |ui| {
                     render_editor(ui, setter, user_state);
                 });
@@ -354,13 +388,14 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
             let (rack_rect, _) =
                 ui.allocate_exact_size(Vec2::new(rack_w, middle_height), egui::Sense::hover());
             let rack_content = paint::glass_card(ui.painter(), rack_rect);
+            let rack_content_h = rack_content.height();
             ui.allocate_new_ui(
                 egui::UiBuilder::new()
                     .max_rect(rack_content)
                     .id_salt("akifx_rack_card")
                     .layout(egui::Layout::top_down(egui::Align::LEFT)),
                 |ui| {
-                    render_rack_panel(ui, state, rack_w);
+                    render_rack_panel(ui, state, rack_w, rack_content_h);
                 },
             );
 
@@ -646,11 +681,24 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
     });
 }
 
-fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
+fn render_rack_panel(
+    ui: &mut egui::Ui,
+    state: &mut EditorState,
+    rack_w: f32,
+    card_content_h: f32,
+) {
     let p = pal();
     ui.add_space(8.0);
     ui.label(theme::eyebrow("Effect Rack"));
     ui.add_space(4.0);
+
+    // Rows stretch to fill the card exactly at the default zoom: the module
+    // count shares the card content height minus the header block (top gap +
+    // eyebrow + spacing + rounding safety). Clamped so zoomed-in text
+    // scrolls instead of squashing, and zoomed-out text still fits its rows.
+    let region_h = (card_content_h - 34.0).max(200.0);
+    let pitch = (region_h / crate::MODULE_COUNT as f32).clamp(ROW_HEIGHT + 2.0, 76.0);
+    let row_h = (pitch - 2.0).max(28.0 * theme::font_zoom());
 
     // Snapshot order once per frame (clone under lock, drop lock immediately).
     let order_snapshot = state.order.lock().clone();
@@ -776,7 +824,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // derives from sel_rect response instead.
                 let row_rect = Rect::from_min_size(
                     ui.cursor().min,
-                    Vec2::new(ui.available_width().min(rack_w - 48.0), ROW_HEIGHT),
+                    Vec2::new(ui.available_width().min(rack_w - 48.0), row_h),
                 );
                 // Advance layout past the row WITHOUT registering any
                 // interactable (Sense::hover()/click() on this full-row rect
@@ -836,7 +884,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // T1: LED click zone (left 24px)
                 let led_zone = Rect::from_min_size(
                     row_rect.min,
-                    Vec2::new(24.0, ROW_HEIGHT),
+                    Vec2::new(24.0, row_h),
                 );
                 let led_resp = ui.allocate_rect(led_zone, egui::Sense::click())
                     .on_hover_cursor(CursorIcon::PointingHand);
@@ -844,7 +892,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // T1: Grip drag zone (24px..48px)
                 let grip_zone = Rect::from_min_size(
                     Pos2::new(row_rect.left() + 24.0, row_rect.top()),
-                    Vec2::new(24.0, ROW_HEIGHT),
+                    Vec2::new(24.0, row_h),
                 );
                 let grip_resp = ui.allocate_rect(grip_zone, egui::Sense::drag())
                     .on_hover_cursor(CursorIcon::Grab);
@@ -852,7 +900,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 // T1: Selection strip (48px..right-8) — also drives is_hovered
                 let sel_zone = Rect::from_min_size(
                     Pos2::new(row_rect.left() + 48.0, row_rect.top()),
-                    Vec2::new((rack_w - 48.0 - 48.0 - 8.0).max(40.0), ROW_HEIGHT),
+                    Vec2::new((rack_w - 48.0 - 48.0 - 8.0).max(40.0), row_h),
                 );
                 let sel_resp_zone = ui.allocate_rect(sel_zone, egui::Sense::click());
                 let is_hovered = !drag.active && !is_selected && sel_resp_zone.hovered();
@@ -931,7 +979,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                         pal().text_tertiary
                     };
                     p.text(
-                        Pos2::new(row_rect.left() + 52.0, row_rect.top() + ROW_HEIGHT * 0.5),
+                        Pos2::new(row_rect.left() + 52.0, row_rect.top() + row_h * 0.5),
                         egui::Align2::LEFT_CENTER,
                         format!("{:>2}", pos + 1),
                         theme::mono(11.0),
@@ -947,7 +995,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                             .size()
                             .x;
                         p.text(
-                            Pos2::new(row_rect.right() - 10.0, row_rect.top() + ROW_HEIGHT * 0.5),
+                            Pos2::new(row_rect.right() - 10.0, row_rect.top() + row_h * 0.5),
                             egui::Align2::RIGHT_CENTER,
                             text,
                             theme::mono(10.5),
@@ -965,7 +1013,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     let name_text =
                         truncate_to_width(p, entry.name, theme::sans_medium(14.0), name_max_w);
                     p.text(
-                        Pos2::new(name_x, row_rect.top() + ROW_HEIGHT * 0.5),
+                        Pos2::new(name_x, row_rect.top() + row_h * 0.5),
                         egui::Align2::LEFT_CENTER,
                         name_text,
                         theme::sans_medium(14.0),
@@ -1750,20 +1798,25 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
 
             ui.add_space(10.0);
 
-            // UI zoom cycle button (60 -> 80 -> 100 -> 125 -> 150 -> 200)
+            // UI zoom cycle button: AUTO (system scale) -> 60 -> ... -> 200
             let z = *state.params.ui_zoom.lock();
+            let zoom_label = if z <= 0.01 {
+                "AUTO".to_owned()
+            } else {
+                format!("{:.0}%", z * 100.0)
+            };
             let zoom_btn = ui.add(
                 egui::Button::new(
-                    RichText::new(format!("{:.0}%", z * 100.0))
-                        .font(theme::mono_medium(11.0))
+                    RichText::new(zoom_label)
+                        .font(theme::mono_medium(12.5))
                         .color(p.text_secondary),
                 )
                 .fill(theme::with_alpha(p.text_primary, 0.06))
                 .stroke(Stroke::new(1.0, p.border))
-                .min_size(Vec2::new(56.0, 22.0)),
+                .min_size(Vec2::new(64.0, 26.0)),
             );
             if zoom_btn
-                .on_hover_text("UI zoom \u{2014} click to cycle 60\u{2013}200%")
+                .on_hover_text("UI zoom \u{2014} click to cycle AUTO/60\u{2013}200% (AUTO follows the system display scale)")
                 .clicked()
             {
                 *state.params.ui_zoom.lock() = zoom_step(z, 1);
@@ -2123,13 +2176,24 @@ mod tests {
     }
 
     #[test]
-    fn zoom_step_in_clamps_at_max() {
-        assert!((zoom_step(2.0, 1) - 2.0).abs() < 1e-6);
+    fn zoom_step_in_past_max_wraps_into_auto() {
+        assert!(zoom_step(2.0, 1).abs() < 1e-6);
     }
 
     #[test]
-    fn zoom_step_out_clamps_at_min() {
-        assert!((zoom_step(0.6, -1) - 0.6).abs() < 1e-6);
+    fn zoom_step_out_past_min_wraps_into_auto() {
+        assert!(zoom_step(0.6, -1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zoom_step_auto_up_enters_list() {
+        assert!((zoom_step(0.0, 1) - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zoom_step_auto_down_stays_auto() {
+        assert!(zoom_step(0.0, -1).abs() < 1e-6);
+        assert!(zoom_step(0.0, 0).abs() < 1e-6);
     }
 
     #[test]

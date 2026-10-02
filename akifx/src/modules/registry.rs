@@ -41,7 +41,8 @@ macro_rules! define_modules {
             #[persist = "module_order"]
             pub module_order: parking_lot::Mutex<Vec<usize>>,
 
-            /// Persisted UI zoom level. 1.0 = 100%.
+            /// Persisted UI zoom level. 1.0 = 100%; 0.0 = AUTO (follow the
+            /// system display scale), the fresh-install default.
             #[persist = "ui_zoom"]
             pub ui_zoom: parking_lot::Mutex<f32>,
 
@@ -60,7 +61,7 @@ macro_rules! define_modules {
                     )*
                     global_bypass: nih_plug::prelude::BoolParam::new("Global Bypass", false),
                     module_order: parking_lot::Mutex::new((0..MODULE_COUNT).collect()),
-                    ui_zoom: parking_lot::Mutex::new(1.0),
+                    ui_zoom: parking_lot::Mutex::new(0.0),
                     module_enabled: parking_lot::Mutex::new(vec![false; MODULE_COUNT]),
                 }
             }

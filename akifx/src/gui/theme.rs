@@ -171,6 +171,48 @@ pub fn grain_color() -> Color32 {
 }
 
 // ---------------------------------------------------------------------------
+// System display scale (AUTO zoom)
+// ---------------------------------------------------------------------------
+
+/// The system display scale factor (1.0 = 96 DPI). baseview does not apply
+/// DPI scaling to the egui renderer on Windows, so AUTO zoom reads this
+/// directly and multiplies every font size by it. Cached after first read.
+pub fn system_scale_factor() -> f32 {
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| system_scale_factor_uncached().clamp(1.0, 3.0))
+}
+
+#[cfg(windows)]
+fn system_scale_factor_uncached() -> f32 {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetDC(hwnd: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn ReleaseDC(hwnd: *mut core::ffi::c_void, hdc: *mut core::ffi::c_void) -> i32;
+    }
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn GetDeviceCaps(hdc: *mut core::ffi::c_void, index: i32) -> i32;
+    }
+    const LOGPIXELSX: i32 = 88;
+    unsafe {
+        let hdc = GetDC(std::ptr::null_mut());
+        let dpi = if hdc.is_null() {
+            96
+        } else {
+            let dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+            ReleaseDC(std::ptr::null_mut(), hdc);
+            if dpi > 0 { dpi } else { 96 }
+        };
+        dpi as f32 / 96.0
+    }
+}
+
+#[cfg(not(windows))]
+fn system_scale_factor_uncached() -> f32 {
+    1.0
+}
+
+// ---------------------------------------------------------------------------
 // Derived-color helpers — the `color-mix(...)` equivalents (§3.6)
 // ---------------------------------------------------------------------------
 
@@ -322,6 +364,10 @@ pub fn configure_visuals(ctx: &egui::Context) {
     // Windows: glass card treatment (translucent + border + soft shadow)
     v.window_shadow = card_shadow();
     v.window_stroke = Stroke::new(1.0, p.liquid_border);
+
+    // A drag grip you can actually find and grab (baseview windows resize
+    // through the plugin API corner, not the OS frame)
+    v.resize_corner_size = 26.0;
 
     ctx.set_visuals(v);
     apply_text_styles(ctx);
