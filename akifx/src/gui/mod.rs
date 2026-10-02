@@ -1,10 +1,11 @@
-//! AkiFX egui-based plugin editor — FX Rack interface.
+//! AkiFX egui-based plugin editor — FX Rack interface in the Aki "Aurora
+//! Glass" design language.
 //!
-//! Left panel: scrollable rack of 21 effect modules with drag-to-reorder,
-//! power toggles, and latency badges.
-//! Right panel: selected module's parameter sliders only.
-//! Top bar: wordmark, subtitle, live total latency, and About button.
-//! Bottom strip: master gain slider.
+//! Title bar: brand wordmark with the signature star and eyebrow subtitle.
+//! Left rack: the 11 effect modules with drag-to-reorder, power toggles, and
+//! latency badges, rendered as the navigation rail.
+//! Right panel: the selected module's parameter controls.
+//! Footer: global bypass, master gain, output meters, latency, zoom, About.
 
 use nih_plug::prelude::*;
 use nih_plug_egui::egui::{self, Color32, CornerRadius, CursorIcon, LayerId, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
@@ -14,6 +15,7 @@ use nih_plug_egui::{create_egui_editor, resizable_window::ResizableWindow, EguiS
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+mod paint;
 mod theme;
 pub mod descriptions;
 pub mod state;
@@ -21,6 +23,7 @@ pub mod state;
 use crate::AkiFxParams;
 use crate::SharedOrder;
 use state::ModuleUiEntry;
+use theme::pal;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -34,12 +37,6 @@ const ROW_HEIGHT: f32 = 34.0;
 const TOP_BAR_HEIGHT: f32 = 48.0;
 /// Bottom strip height.
 const BOTTOM_HEIGHT: f32 = 44.0;
-
-/// White at ~5% alpha for subtle borders on dark backgrounds.
-const BORDER_FAINT: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 13);
-
-/// Jade 600 at 40% alpha — selected-row left accent bar.
-const JADE_600_40: Color32 = Color32::from_rgba_premultiplied(29, 45, 39, 102);
 
 /// Compute the rack panel width based on total window width.
 ///
@@ -179,6 +176,9 @@ pub struct EditorState {
     /// Live spectrum handle from the Spectral Compressor module, when
     /// present (set by `Plugin::editor()`).
     pub spectrum_view: Option<crate::modules::spectral_compressor::analyzer::SpectrumView>,
+    /// Cached grain-noise texture for the aurora background (lazily built on
+    /// the first painted frame).
+    pub noise: Option<egui::TextureHandle>,
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +227,7 @@ pub fn create_editor(
             peak_l,
             peak_r,
             spectrum_view,
+            noise: None,
         },
         // build: called once when the editor window is created
         |ctx, _user_state| {
@@ -235,12 +236,16 @@ pub fn create_editor(
         },
         // update: called every frame
         move |ctx, setter, user_state| {
-            // T6/R4: font zoom — sync theme zoom from the persisted param.
+            // Font zoom — sync theme zoom from the persisted param.
             // (ctx.set_pixels_per_point is IGNORED by the baseview renderer,
             // which always presents at the system scale factor; scaling is
             // therefore implemented at the theme font-size level instead.)
             let z = *user_state.params.ui_zoom.lock();
-            theme::set_font_zoom_pct((z * 100.0).round() as u32);
+            let z_pct = (z * 100.0).round() as u32;
+            if theme::font_zoom_pct() != z_pct {
+                theme::set_font_zoom_pct(z_pct);
+                theme::apply_text_styles(ctx);
+            }
 
             ResizableWindow::new("akifx_resize")
                 .min_size(Vec2::new(900.0, 600.0))
@@ -256,6 +261,10 @@ pub fn create_editor(
 // ---------------------------------------------------------------------------
 
 fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorState) {
+    // Aurora curtain + grain behind everything; all fills above stay
+    // transparent so the background breathes through the glass cards.
+    paint::background(ui, &mut state.noise);
+
     // CRITICAL: use the CLIP RECT for sizing, not available_height(). Inside
     // ResizableWindow's child ui, available_height() can be unbounded, which
     // previously inflated the middle panel so much that the bottom master
@@ -309,23 +318,25 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
     // ── About floating window (rendered last, on top) ────────────────────
     let show_about = ui.memory(|m| m.data.get_temp::<bool>(about_id()).unwrap_or(false));
     if show_about {
+        let p = pal();
         egui::Window::new("About AkiFX")
             .collapsible(false)
             .resizable(false)
             .default_width(400.0)
             .frame(
                 egui::Frame::NONE
-                    .fill(theme::INK_900)
-                    .stroke(Stroke::new(1.0, BORDER_FAINT))
+                    .fill(p.liquid_bg)
+                    .stroke(Stroke::new(1.0, p.liquid_border))
                     .inner_margin(16.0)
-                    .corner_radius(CornerRadius::same(16)),
+                    .corner_radius(CornerRadius::same(theme::radius::MD as u8))
+                    .shadow(theme::card_shadow()),
             )
             .show(ui.ctx(), |ui| {
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new(format!("AkiFX v{}", env!("CARGO_PKG_VERSION")))
                             .font(theme::heading(14.0))
-                            .color(theme::SAND_300)
+                            .color(p.text_primary)
                             .strong(),
                     );
                     ui.add_space(8.0);
@@ -336,7 +347,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                              NIH-plug plugins (ISC/GPLv3).",
                         )
                         .font(theme::body(11.0))
-                        .color(theme::MIST_400),
+                        .color(p.text_secondary),
                     );
                     ui.add_space(4.0);
                     ui.label(
@@ -344,7 +355,20 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                             "Airwindows Hard Vacuum port credit: Chris Johnson.",
                         )
                         .font(theme::body(11.0))
-                        .color(theme::MIST_400),
+                        .color(p.text_secondary),
+                    );
+                    // Signature quote line (one per app)
+                    ui.add_space(10.0);
+                    paint::hairline(ui.painter(), Rect::from_min_max(
+                        Pos2::new(ui.cursor().left(), ui.cursor().top()),
+                        Pos2::new(ui.cursor().right(), ui.cursor().top() + 1.0),
+                    ));
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("\u{201c}The space between notes is where \
+                            the story lives.\u{201d}")
+                            .font(theme::display_italic(11.0))
+                            .color(p.text_tertiary),
                     );
                 });
             });
@@ -356,15 +380,16 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
 // ---------------------------------------------------------------------------
 
 fn render_top_bar(ui: &mut egui::Ui, total_width: f32) {
+    let p = pal();
     ui.allocate_ui_with_layout(
         Vec2::new(total_width, TOP_BAR_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            // AkiFX wordmark (Cormorant Garamond SemiBold)
+            // AkiFX wordmark (Fraunces SemiBold)
             ui.label(
                 RichText::new("AkiFX")
                     .font(theme::heading(20.0))
-                    .color(theme::SAND_300)
+                    .color(p.text_primary)
                     .strong(),
             );
 
@@ -372,14 +397,14 @@ fn render_top_bar(ui: &mut egui::Ui, total_width: f32) {
             ui.label(
                 RichText::new("\u{00b7}")
                     .font(theme::mono(14.0))
-                    .color(theme::CHARCOAL_600),
+                    .color(p.border),
             );
 
             // Subtitle
             ui.label(
                 RichText::new("SpectralSuite \u{00d7} NIH-plug suite")
                     .font(theme::body(11.0))
-                    .color(theme::MIST_400),
+                    .color(p.text_secondary),
             );
 
         },
@@ -387,8 +412,9 @@ fn render_top_bar(ui: &mut egui::Ui, total_width: f32) {
 }
 
 fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
+    let p = pal();
     ui.add_space(8.0);
-    ui.label(theme::section_label("EFFECT RACK"));
+    ui.label(theme::eyebrow("Effect Rack"));
     ui.add_space(4.0);
 
     // Snapshot order once per frame (clone under lock, drop lock immediately).
@@ -506,7 +532,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                 let is_active = !is_bypassed;
 
                 // ── T4: Hover background (before content, lowest z) ──────
-                let hover_bg = theme::CHARCOAL_700_50;
+                let hover_bg = theme::with_alpha(p.text_primary, 0.06);
 
                 // ── Row passive rect (NO senses!) ────────────────────────
                 // CRITICAL FIX 2: even Sense::hover() registers this rect as
@@ -538,7 +564,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                                 Vec2::new(3.0, ROW_HEIGHT),
                             ),
                             CornerRadius::ZERO,
-                            JADE_600_40,
+                            theme::with_alpha(pal().accent, 0.4),
                         );
                     }
 
@@ -552,12 +578,12 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                         lift_painter.rect_filled(
                             row_rect,
                             CornerRadius::same(8),
-                            theme::CHARCOAL_700_100,
+                            pal().surface_1,
                         );
                         lift_painter.rect_stroke(
                             row_rect,
                             CornerRadius::same(8),
-                            Stroke::new(1.5, theme::GLOW_JADE),
+                            Stroke::new(1.5, pal().accent),
                             StrokeKind::Outside,
                         );
                     }
@@ -565,11 +591,10 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     // T5: Drop pulse — after release, the landed row fades from lifted to normal.
                     if !drag.active && pulse < 0.99 {
                         let lift_factor = (1.0 - pulse).clamp(0.0, 1.0);
-                        let a = (lift_factor * 255.0) as u8;
                         p.rect_filled(
                             row_rect,
                             CornerRadius::same(8),
-                            Color32::from_rgba_premultiplied(0x2a, 0x2a, 0x3a, a),
+                            theme::with_alpha(pal().surface_1, lift_factor),
                         );
                     }
                 } // drop painter borrow
@@ -637,17 +662,21 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     // Draw LED circle at zone center
                     let led_center = Pos2::new(led_zone.left() + 12.0, led_zone.center().y);
                     if is_active {
-                        p.circle_filled(led_center, 4.0, theme::JADE_400);
-                        p.circle_stroke(led_center, 6.0, Stroke::new(2.0, theme::JADE_400_60));
+                        p.circle_filled(led_center, 4.0, pal().accent);
+                        p.circle_stroke(
+                            led_center,
+                            6.0,
+                            Stroke::new(2.0, theme::with_alpha(pal().accent, 0.6)),
+                        );
                     } else {
-                        p.circle_filled(led_center, 4.0, theme::CHARCOAL_600);
+                        p.circle_filled(led_center, 4.0, pal().border);
                     }
 
                     // Draw grip lines
                     let grip_color = if grip_resp.hovered() {
-                        theme::MIST_300
+                        pal().text_primary
                     } else {
-                        theme::MIST_400
+                        pal().text_secondary
                     };
                     let cx = grip_zone.center().x;
                     let cy = grip_zone.center().y;
@@ -664,9 +693,9 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     // ── Passive labels (no Sense allocations) ─────────
                     // Index number (1-based, monospace) at x+52
                     let idx_color = if is_selected {
-                        theme::MIST_400
+                        pal().text_secondary
                     } else {
-                        theme::CHARCOAL_600
+                        pal().text_tertiary
                     };
                     p.text(
                         Pos2::new(row_rect.left() + 52.0, row_rect.top() + ROW_HEIGHT * 0.5),
@@ -682,7 +711,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                         egui::Align2::LEFT_CENTER,
                         entry.name,
                         theme::body(12.0),
-                        theme::MIST_300,
+                        pal().text_primary,
                     );
 
                     // Latency badge (right-aligned, only if > 0)
@@ -691,8 +720,8 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                             Pos2::new(row_rect.right() - 12.0, row_rect.top() + ROW_HEIGHT * 0.5),
                             egui::Align2::RIGHT_CENTER,
                         format!("{} samples", entry.latency_samples),
-                        theme::mono(9.0),
-                        theme::SAND_400,
+                        theme::mono(9.5),
+                        pal().accent_secondary,
                         );
                     }
                 } // drop painter borrow
@@ -739,7 +768,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
             }
         }
 
-        // T6: Draw 4px tall JADE_400 gap bar (replacement for old 3px hline).
+        // T6: Draw the 4px gap insertion indicator.
         if !row_rects.is_empty() {
             let bar_height = 4.0;
             let (bar_y, bar_left, bar_right) = if new_drag.target_pos < row_rects.len() {
@@ -757,7 +786,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
             ui.painter().rect_filled(
                 bar_rect,
                 CornerRadius::same(2),
-                theme::JADE_400,
+                pal().accent,
             );
         }
 
@@ -797,6 +826,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
 // ---------------------------------------------------------------------------
 
 fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorState) {
+    let p = pal();
     // Resolve the selected entry: state.selected is a module index.
     // Find its position in the current processing order.
     let order_snapshot = state.order.lock().clone();
@@ -811,27 +841,27 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
         ui.label(
             RichText::new("No module selected.")
                 .font(theme::body(12.0))
-                .color(theme::CHARCOAL_600),
+                .color(p.text_tertiary),
         );
         return;
     };
 
     ui.add_space(12.0);
 
-    // Module name heading (Cormorant Garamond SemiBold, 18px).
+    // Module name heading (Fraunces SemiBold).
     ui.label(
         RichText::new(entry.name)
-            .font(theme::heading(18.0))
-            .color(theme::MIST_300)
+            .font(theme::heading(20.0))
+            .color(p.text_primary)
             .strong(),
     );
 
-    // T7: Module intro description
+    // Module intro description
     if let Some(intro) = descriptions::module_intro(entry.id_prefix) {
         ui.label(
             RichText::new(intro)
                 .font(theme::body(11.0))
-                .color(theme::MIST_400),
+                .color(p.text_secondary),
         );
     }
 
@@ -847,12 +877,12 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(humanize_name(entry.id_prefix))
-                .font(theme::body(10.0))
-                .color(theme::MIST_400),
+                .font(theme::sans_semibold(10.0))
+                .color(p.text_tertiary),
         );
         ui.add_space(8.0);
 
-        // T8: Mini power toggle — wired to the same bypass flag as the rack.
+        // Mini power toggle — wired to the same bypass flag as the rack.
         let is_active = !entry.bypass.load(Ordering::Relaxed);
         if theme::power_toggle(ui, is_active)
             .on_hover_text(
@@ -868,11 +898,11 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
 
         ui.add_space(8.0);
         let (label, color) = if is_active {
-            ("ACTIVE", theme::JADE_400)
+            ("ACTIVE", p.accent)
         } else {
-            ("BYPASSED", theme::CHARCOAL_600)
+            ("BYPASSED", p.text_tertiary)
         };
-        ui.label(RichText::new(label).font(theme::body(10.0)).color(color));
+        ui.label(RichText::new(label).font(theme::sans_semibold(10.0)).color(color));
     });
 
     ui.add_space(8.0);
@@ -905,7 +935,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
                     ui.separator();
                     ui.add_space(2.0);
                     let group = param_group_label(&name);
-                    ui.label(theme::section_label_raw(&humanize_name(&group)));
+                    ui.label(theme::eyebrow_raw(&humanize_name(&group)));
                     prev_nesting = nesting;
                 }
 
@@ -913,8 +943,8 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
                 let name_lower = name.to_lowercase();
                 ui.label(
                     RichText::new(humanize_name(&name))
-                        .font(theme::body(11.0))
-                        .color(theme::MIST_400),
+                        .font(theme::body(12.0))
+                        .color(p.text_secondary),
                 );
 
                 // Safety: param_ptr is valid — it comes from param_map() on a valid Params.
@@ -932,7 +962,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
                 ui.label(
                     RichText::new("No parameters available for this module.")
                         .font(theme::body(11.0))
-                        .color(theme::CHARCOAL_600),
+                        .color(p.text_tertiary),
                 );
             }
         });
@@ -993,8 +1023,9 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
     let height = 140.0;
     let (rect, _resp) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
+    let on_contrast = theme::with_alpha(pal().text_on_contrast, 0.08);
 
-    painter.rect_filled(rect, 4.0, Color32::BLACK);
+    painter.rect_filled(rect, 4.0, pal().surface_contrast);
 
     let nyquist = snapshot.sample_rate * 0.5;
     if snapshot.sample_rate <= 0.0 || nyquist <= MIN_FREQ {
@@ -1013,7 +1044,7 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
         rect.bottom() - rect.height() * t.clamp(0.0, 1.0)
     };
 
-    // Spectrum fill.
+    // Spectrum line (cold ramp color).
     let bins = &snapshot.magnitudes_db;
     let bin_span = |bin: usize| -> (f32, f32) {
         let width_per_bin = nyquist * 2.0 / snapshot.window_size.max(1) as f32;
@@ -1029,7 +1060,7 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
         let y = y_of(db);
         painter.line_segment(
             [egui::pos2(x0, y), egui::pos2(x1, y)],
-            Stroke::new(1.5, theme::JADE_400),
+            Stroke::new(1.5, pal().grad_b),
         );
         painter.line_segment(
             [egui::pos2(x1, y), egui::pos2(x1, rect.bottom())],
@@ -1037,7 +1068,7 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
         );
     }
 
-    // Threshold curve overlay (sand).
+    // Threshold curve overlay (warm accent).
     let thresholds = &snapshot.thresholds_db;
     if !thresholds.is_empty() {
         let mut points: Vec<egui::Pos2> = Vec::with_capacity(thresholds.len());
@@ -1050,12 +1081,12 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
             points.push(egui::pos2(x_of(freq), y_of(db)));
         }
         if points.len() >= 2 {
-            painter.add(egui::Shape::line(points, Stroke::new(1.5, theme::SAND_400)));
+            painter.add(egui::Shape::line(points, Stroke::new(1.5, pal().accent_tertiary)));
         }
     }
 
     // Frame + octave gridlines.
-    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, theme::CHARCOAL_600), egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, on_contrast), egui::StrokeKind::Inside);
     for freq in [50.0f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
         if freq >= nyquist {
             break;
@@ -1063,7 +1094,7 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
         let x = x_of(freq);
         painter.line_segment(
             [egui::pos2(x, rect.top() + 2.0), egui::pos2(x, rect.bottom() - 2.0)],
-            Stroke::new(0.5, Color32::from_rgba_unmultiplied(255, 255, 255, 18)),
+            Stroke::new(0.5, on_contrast),
         );
     }
 }
@@ -1076,12 +1107,13 @@ fn render_spectrum_view(ui: &mut egui::Ui, view: &crate::modules::spectral_compr
 /// from the audio thread's atomics; the bars show a linear 0..1 scale with
 /// the numeric dBFS of the current peak.
 fn meter_pair(ui: &mut egui::Ui, state: &EditorState) {
+    let p = pal();
     let peak_l = state.peak_l.load(Ordering::Relaxed);
     let peak_r = state.peak_r.load(Ordering::Relaxed);
 
     let (rect, _resp) = ui.allocate_exact_size(Vec2::new(96.0, 20.0), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, theme::CHARCOAL_700_50);
+    painter.rect_filled(rect, 3.0, theme::with_alpha(p.text_primary, 0.06));
 
     let to_x = |v: f32| rect.left() + rect.width() * v.clamp(0.0, 1.0);
     for (i, peak) in [peak_l, peak_r].iter().enumerate() {
@@ -1092,15 +1124,15 @@ fn meter_pair(ui: &mut egui::Ui, state: &EditorState) {
             Vec2::new(rect.width() - 4.0, h),
         );
         let fill_end = to_x(peak.min(1.0));
-        let color = if *peak > 1.0 { theme::SAND_400 } else { theme::JADE_400 };
+        let color = if *peak > 1.0 { p.error } else { p.grad_b };
         let fill = egui::Rect::from_min_size(
             track.min,
             Vec2::new((fill_end - track.left()).max(0.0), h),
         );
-        painter.rect_filled(track, 2.0, Color32::BLACK);
+        painter.rect_filled(track, 2.0, p.surface_contrast);
         painter.rect_filled(fill, 2.0, color);
     }
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, theme::CHARCOAL_600), egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
 
     let db = |v: f32| -> String {
         if v <= 1.0e-5 {
@@ -1111,8 +1143,8 @@ fn meter_pair(ui: &mut egui::Ui, state: &EditorState) {
     };
     ui.label(
         RichText::new(format!("L {} / R {} dBFS", db(peak_l), db(peak_r)))
-            .font(theme::mono(9.0))
-            .color(theme::MIST_400),
+            .font(theme::mono(9.5))
+            .color(p.text_secondary),
     )
     .on_hover_text("Output peaks after processing (before Safety Limiter guard).");
 }
@@ -1131,21 +1163,37 @@ fn render_bottom_strip(
         Vec2::new(total_width, BOTTOM_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
+            let p = pal();
             // MASTER section label
-            ui.label(theme::section_label("MASTER"));
+            ui.label(theme::eyebrow("Master"));
             ui.add_space(8.0);
 
             // Global bypass: one button for the whole chain (bit-identical
             // passthrough, automatable by the host).
             let bypassed = state.params.global_bypass.value();
+            let (bp_text, bp_text_color, bp_fill, bp_stroke) = if bypassed {
+                (
+                    "GLOBAL BYPASS: ON",
+                    p.warning,
+                    theme::with_alpha(p.warning, 0.12),
+                    p.warning,
+                )
+            } else {
+                (
+                    "GLOBAL BYPASS: OFF",
+                    p.text_primary,
+                    Color32::TRANSPARENT,
+                    p.border,
+                )
+            };
             let bp_btn = ui.add(
                 egui::Button::new(
-                    RichText::new(if bypassed { "GLOBAL BYPASS: ON" } else { "GLOBAL BYPASS: OFF" })
-                        .font(theme::mono(11.0))
-                        .color(if bypassed { theme::SAND_400 } else { theme::MIST_300 }),
+                    RichText::new(bp_text)
+                        .font(theme::mono_medium(11.0))
+                        .color(bp_text_color),
                 )
-                .fill(if bypassed { theme::CHARCOAL_700_50 } else { Color32::TRANSPARENT })
-                .stroke(Stroke::new(1.0, theme::CHARCOAL_600)),
+                .fill(bp_fill)
+                .stroke(Stroke::new(1.0, bp_stroke)),
             );
             if bp_btn
                 .on_hover_text("Bypass the entire chain (bit-identical passthrough). Automatable.")
@@ -1174,10 +1222,10 @@ fn render_bottom_strip(
                 // About ghost button
                 let about_btn = ui.add(
                     egui::Button::new(
-                        RichText::new("About").font(theme::body(11.0)),
+                        RichText::new("About").font(theme::body(11.0)).color(p.text_secondary),
                     )
                     .fill(Color32::TRANSPARENT)
-                    .stroke(Stroke::new(1.0, theme::CHARCOAL_600)),
+                    .stroke(Stroke::new(1.0, p.border)),
                 );
                 if about_btn.on_hover_text("About AkiFX").clicked() {
                     let current = ui
@@ -1192,10 +1240,11 @@ fn render_bottom_strip(
                 let zoom_btn = ui.add(
                     egui::Button::new(
                         RichText::new(format!("{:.0}%", z * 100.0))
-                            .font(theme::mono(11.0)),
+                            .font(theme::mono_medium(11.0))
+                            .color(p.text_secondary),
                     )
-                    .fill(theme::CHARCOAL_700_50)
-                    .stroke(Stroke::new(1.0, theme::CHARCOAL_600))
+                    .fill(theme::with_alpha(p.text_primary, 0.06))
+                    .stroke(Stroke::new(1.0, p.border))
                     .min_size(Vec2::new(56.0, 22.0)),
                 );
                 if zoom_btn
@@ -1218,7 +1267,7 @@ fn render_bottom_strip(
                 ui.label(
                     RichText::new(format!("Latency: {} samples", total_latency))
                         .font(theme::mono(11.0))
-                        .color(theme::MIST_300),
+                        .color(p.text_secondary),
                 )
                 .on_hover_text(
                     "Total processing latency contributed by enabled effects (samples).",
