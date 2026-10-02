@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 pub mod dsp;
 pub mod gui;
 pub mod modules;
+pub mod presets;
 pub mod stft;
 
 // Re-export SharedOrder for persistence and GUI use.

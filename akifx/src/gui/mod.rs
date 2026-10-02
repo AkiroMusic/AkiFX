@@ -223,6 +223,8 @@ pub struct EditorState {
     pub meter_db_r: f32,
     /// Latched overload indicator — stays red until the meter is clicked.
     pub clip_latched: bool,
+    /// Last applied factory preset (index into `presets::PRESETS`).
+    pub active_preset: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +277,7 @@ pub fn create_editor(
             meter_db_l: METER_MIN_DB,
             meter_db_r: METER_MIN_DB,
             clip_latched: false,
+            active_preset: None,
         },
         // build: called once when the editor window is created
         |ctx, _user_state| {
@@ -334,7 +337,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                 .max_rect(title_rect)
                 .layout(egui::Layout::top_down(egui::Align::LEFT)),
             |ui| {
-        render_title_bar(ui, state);
+        render_title_bar(ui, setter, state);
     });
     ui.add_space(8.0);
 
@@ -456,10 +459,70 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
 }
 
 // ---------------------------------------------------------------------------
+// Preset application (factory presets, title-bar PresetBar)
+// ---------------------------------------------------------------------------
+
+/// Bridges [`presets::PatchSink`] to the editor state and the host-notifying
+/// [`ParamSetter`]: module enable flags write straight into the shared bypass
+/// atomics, parameter values go through begin/set/end gesture groups.
+struct GuiPresetSink<'a> {
+    entries: &'a [ModuleUiEntry],
+    setter: &'a ParamSetter<'a>,
+}
+
+impl crate::presets::PatchSink for GuiPresetSink<'_> {
+    fn set_module_enabled(&mut self, module: usize, enabled: bool) {
+        if let Some(entry) = self.entries.get(module) {
+            entry.bypass.store(!enabled, Ordering::Relaxed);
+        }
+    }
+
+    unsafe fn set_normalized(&mut self, _module: usize, _id: &str, ptr: &ParamPtr, normalized: f32) {
+        match ptr {
+            ParamPtr::FloatParam(p) => {
+                self.setter.begin_set_parameter(&**p);
+                self.setter.set_parameter_normalized(&**p, normalized);
+                self.setter.end_set_parameter(&**p);
+            }
+            ParamPtr::IntParam(p) => {
+                self.setter.begin_set_parameter(&**p);
+                self.setter.set_parameter_normalized(&**p, normalized);
+                self.setter.end_set_parameter(&**p);
+            }
+            ParamPtr::BoolParam(p) => {
+                self.setter.begin_set_parameter(&**p);
+                self.setter.set_parameter_normalized(&**p, normalized);
+                self.setter.end_set_parameter(&**p);
+            }
+            ParamPtr::EnumParam(p) => {
+                self.setter.begin_set_parameter(&**p);
+                self.setter.set_parameter_normalized(&**p, normalized);
+                self.setter.end_set_parameter(&**p);
+            }
+        }
+    }
+}
+
+/// Apply a factory preset through the host-notifying sink and mirror the new
+/// module power states into the persisted `module_enabled` params.
+fn apply_preset(state: &mut EditorState, setter: &ParamSetter, index: usize) {
+    let Some(preset) = crate::presets::PRESETS.get(index) else {
+        return;
+    };
+    let mut sink = GuiPresetSink {
+        entries: &state.entries,
+        setter,
+    };
+    crate::presets::apply_to_sink(preset, state.params.as_ref(), &mut sink);
+    crate::gui::state::sync_persisted_enabled(state.params.as_ref(), &state.entries);
+    state.active_preset = Some(index);
+}
+
+// ---------------------------------------------------------------------------
 // Title bar
 // ---------------------------------------------------------------------------
 
-fn render_title_bar(ui: &mut egui::Ui, state: &EditorState) {
+fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorState) {
     let p = pal();
     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.add_space(theme::space::S4);
@@ -515,6 +578,67 @@ fn render_title_bar(ui: &mut egui::Ui, state: &EditorState) {
             .on_hover_text(
                 "Total processing latency contributed by enabled effects (samples).",
             );
+
+            ui.add_space(theme::space::S3);
+
+            // PresetBar: previous · name dropdown · next
+            let current = state.active_preset;
+            let step = |delta: i32, ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter| {
+                let preset_count = crate::presets::PRESETS.len();
+                let current = state.active_preset;
+                let next = match current {
+                    Some(i) => (i as i32 + delta).rem_euclid(preset_count as i32) as usize,
+                    None if delta > 0 => 1.min(preset_count - 1),
+                    None => 0,
+                };
+                apply_preset(state, setter, next);
+                ui.ctx().request_repaint();
+            };
+            let prev_btn = ui.add(
+                egui::Button::new(
+                    RichText::new("\u{2039}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
+                )
+                .fill(Color32::TRANSPARENT)
+                .min_size(Vec2::new(24.0, 24.0)),
+            );
+            if prev_btn.on_hover_text("Previous preset").clicked() {
+                step(-1, ui, state, setter);
+            }
+
+            let selected_name = current
+                .and_then(|i| crate::presets::PRESETS.get(i))
+                .map(|pr| pr.name)
+                .unwrap_or("Preset");
+            let presets = crate::presets::PRESETS;
+            egui::ComboBox::from_id_salt("akifx_preset_bar")
+                .width(150.0)
+                .selected_text(selected_name)
+                .show_ui(ui, |ui| {
+                    for (i, pr) in presets.iter().enumerate() {
+                        let label = if pr.reset_all {
+                            pr.name.to_owned()
+                        } else {
+                            format!("{} \u{2014} {}", pr.name, pr.role)
+                        };
+                        if ui.selectable_label(current == Some(i), label).clicked() {
+                            apply_preset(state, setter, i);
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Factory presets \u{2014} light to heavy; never touches master gain, the limiter, or global bypass");
+
+            let next_btn = ui.add(
+                egui::Button::new(
+                    RichText::new("\u{203a}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
+                )
+                .fill(Color32::TRANSPARENT)
+                .min_size(Vec2::new(24.0, 24.0)),
+            );
+            if next_btn.on_hover_text("Next preset").clicked() {
+                step(1, ui, state, setter);
+            }
         });
     });
 }
