@@ -594,15 +594,17 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
                 apply_preset(state, setter, next);
                 ui.ctx().request_repaint();
             };
-            let prev_btn = ui.add(
+            // right_to_left lays the first-added widget out at the right:
+            // this is the NEXT stepper (›) as seen on screen.
+            let next_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("\u{2039}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
+                    RichText::new("\u{203a}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
                 )
                 .fill(Color32::TRANSPARENT)
                 .min_size(Vec2::new(24.0, 24.0)),
             );
-            if prev_btn.on_hover_text("Previous preset").clicked() {
-                step(-1, ui, state, setter);
+            if next_btn.on_hover_text("Next preset").clicked() {
+                step(1, ui, state, setter);
             }
 
             let selected_name = current
@@ -629,15 +631,16 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
                 .response
                 .on_hover_text("Factory presets \u{2014} light to heavy; never touches master gain, the limiter, or global bypass");
 
-            let next_btn = ui.add(
+            // second-added = leftmost on screen: the PREVIOUS stepper (‹).
+            let prev_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("\u{203a}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
+                    RichText::new("\u{2039}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
                 )
                 .fill(Color32::TRANSPARENT)
                 .min_size(Vec2::new(24.0, 24.0)),
             );
-            if next_btn.on_hover_text("Next preset").clicked() {
-                step(1, ui, state, setter);
+            if prev_btn.on_hover_text("Previous preset").clicked() {
+                step(-1, ui, state, setter);
             }
         });
     });

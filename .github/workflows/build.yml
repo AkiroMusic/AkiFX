@@ -1,0 +1,75 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: macos-latest
+            name: macos-universal
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        shell: bash
+        run: |
+          cargo test --workspace 2>&1 | tee test_output.txt
+
+      - name: Bundle plugin artifacts
+        run: cargo xtask bundle akifx --release
+
+      - name: Collect artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item -Recurse -Force target/bundled/AkiFX.vst3 release/AkiFX.vst3
+          Copy-Item -Force target/bundled/AkiFX.clap release/AkiFX.clap
+          Copy-Item -Force target/bundled/AkiFX.exe release/AkiFX.exe
+
+      - name: Collect artifacts (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p release
+          cp -R target/bundled/AkiFX.vst3 release/AkiFX.vst3
+          cp -R target/bundled/AkiFX.clap release/AkiFX.clap
+          # The standalone lands as a .app bundle
+          if [ -d "target/bundled/AkiFX.app" ]; then
+            cp -R target/bundled/AkiFX.app release/AkiFX.app
+          fi
+
+      - name: Package zip (bsdtar for forward-slash entries)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            TAR=/c/Windows/System32/tar.exe
+          else
+            TAR=tar
+          fi
+          "$TAR" -a -c -f "AkiFX-${{ matrix.name }}.zip" release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AkiFX-${{ matrix.name }}
+          path: |
+            AkiFX-${{ matrix.name }}.zip
+            test_output.txt
+          if-no-files-found: error
