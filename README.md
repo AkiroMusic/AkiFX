@@ -18,7 +18,7 @@ AkiFX unifies the core effects of two well-known open-source projects into a sin
 - **Free module ordering** — drag-and-drop the processing chain in real time; reorderings persist with your project.
 - **Per-module power switches** — bypassed modules are skipped entirely (zero CPU) with a bit-identical passthrough guarantee; power states are saved with the session.
 - **Global bypass** — one host-automatable button turns the whole plugin into a straight wire.
-- **Factory presets** — ten recipes from Init to Full Suite in the title-bar preset bar; presets never touch master gain, the limiter or global bypass.
+- **Preset-ready title bar** — a preset bar slot ships in the title bar; presets never touch master gain, the limiter or global bypass by design.
 - **Live output metering** — stereo peak meters (−60…+6 dBFS, 0 dB reference, clip latch) fed from the audio thread.
 - **Spectrum view** — the Spectral Compressor draws its live input spectrum with the threshold curve overlaid on a labeled log-frequency grid; tune thresholds by eye.
 - **Correct plug-in delay compensation** — algorithmic latency is reported dynamically and updates within the same processing block whenever it changes.
@@ -73,7 +73,7 @@ cargo test -p akifx
 ### Quick Start
 
 1. Load **AkiFX** on a track. All modules start **bypassed** — the plugin is a straight wire.
-2. Pick a **factory preset** from the title-bar preset bar, or click the rack **LEDs** to enable modules yourself (states persist with the project).
+2. Click the rack **LEDs** to enable the modules you need (states persist with the project).
 3. Select a module to edit its **parameters** on the right; hover any control for a tooltip. Booleans are pill switches, enums are segmented selectors, numbers are gradient sliders.
 4. **Drag the handles** on the left of each row to reorder the chain in real time.
 5. Use **GLOBAL BYPASS** in the bottom strip to A/B the whole chain, and the **peak meters** to watch your output level.
@@ -98,7 +98,7 @@ Spectral modules carry algorithmic latency which is reported to the host and re-
 
 | Document | |
 |---|---|
-| [User Manual — interface, all 11 modules, factory presets, troubleshooting](docs/MANUAL.md) | English + 中文 |
+| [User Manual — interface, all 11 modules, troubleshooting](docs/MANUAL.md) | English + 中文 |
 | [Technical Overview — architecture, STFT engine, DSP internals, UI implementation, test inventory](docs/TECHNICAL.md) | English + 中文 |
 
 ---

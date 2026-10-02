@@ -50,144 +50,10 @@ pub struct ChainPreset {
     pub patches: &'static [ModulePatch],
 }
 
-/// The factory preset table, ordered light → heavy; the first entry is Init.
-pub static PRESETS: &[ChainPreset] = &[
-    ChainPreset {
-        name: "Init",
-        role: "Every effect module bypassed at its default values.",
-        reset_all: true,
-        patches: &[],
-    },
-    ChainPreset {
-        name: "Clean Polish",
-        role: "A touch of Crisp exciter over gentle spectral compression.",
-        reset_all: false,
-        patches: &[
-            ModulePatch {
-                module: 2, // Crisp
-                enabled: true,
-                params: &[("amount", 0.25)],
-            },
-            ModulePatch {
-                module: 5, // Spectral Compressor
-                enabled: true,
-                params: &[("dry_wet", 0.25)],
-            },
-        ],
-    },
-    ChainPreset {
-        name: "Warm Saturate",
-        role: "Soft Vacuum tube-style saturation, medium drive.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 1, // Soft Vacuum
-            enabled: true,
-            params: &[("drive", 0.40), ("warmth", 0.55), ("dry_wet_ratio", 0.80)],
-        }],
-    },
-    ChainPreset {
-        name: "Vocal Air",
-        role: "Crisp with a brighter noise band for breath and presence.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 2, // Crisp
-            enabled: true,
-            params: &[("amount", 0.32), ("nzhpfq", 0.60), ("nzlpff", 0.80)],
-        }],
-    },
-    ChainPreset {
-        name: "Drum Glue",
-        role: "Fast, shallow spectral compression that glues transients.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 5, // Spectral Compressor
-            enabled: true,
-            params: &[
-                ("dry_wet", 0.50),
-                ("attack", 0.10),
-                ("release", 0.30),
-                ("thresh_global", 0.50),
-            ],
-        }],
-    },
-    ChainPreset {
-        name: "Spectral Gate Pad",
-        role: "Frequency-masked gating with a downward tilt for moving pads.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 3, // Spectral Gate
-            enabled: true,
-            params: &[
-                ("cutoff", 0.55),
-                ("balance", 0.65),
-                ("tilt", 0.60),
-                ("enable_tilt", 1.0),
-            ],
-        }],
-    },
-    ChainPreset {
-        name: "Wide Bands",
-        role: "Three-way crossover with a gentle low-band lift.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 6, // Crossover
-            enabled: true,
-            params: &[
-                ("bandcnt", 0.34),
-                ("bg1", 0.60),
-                ("bg2", 0.45),
-                ("bg3", 0.45),
-            ],
-        }],
-    },
-    ChainPreset {
-        name: "Glitch Chop",
-        role: "Buffer stutter keyed to note velocity, dry signal still present.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 8, // Buffr Glitch
-            enabled: true,
-            params: &[
-                ("dry_mix", 0.70),
-                ("velocity_sensitive", 1.0),
-                ("attack_ms", 0.20),
-                ("release_ms", 0.30),
-            ],
-        }],
-    },
-    ChainPreset {
-        name: "Resonant Space",
-        role: "Diopser cascade tuned low and resonant — the sound becomes the room.",
-        reset_all: false,
-        patches: &[ModulePatch {
-            module: 7, // Diopser
-            enabled: true,
-            params: &[("stages", 0.50), ("cutoff", 0.35), ("res", 0.85), ("spread", 0.25)],
-        }],
-    },
-    ChainPreset {
-        name: "Full Suite",
-        role: "Saturation into exciter into spectral compression — everything at once.",
-        reset_all: false,
-        patches: &[
-            ModulePatch {
-                module: 1, // Soft Vacuum
-                enabled: true,
-                params: &[("drive", 0.55), ("warmth", 0.50)],
-            },
-            ModulePatch {
-                module: 2, // Crisp
-                enabled: true,
-                params: &[("amount", 0.35)],
-            },
-            ModulePatch {
-                module: 5, // Spectral Compressor
-                enabled: true,
-                params: &[("dry_wet", 0.35)],
-            },
-        ],
-    },
-];
+/// The factory preset table. Ships empty for now — the bar and the apply
+/// machinery are in place, so entries are a data-only change. Ordered
+/// light → heavy when populated; reserve the first slot for Init.
+pub static PRESETS: &[ChainPreset] = &[];
 
 /// Destination for [`apply_to_sink`] — implemented against the host-notifying
 /// `ParamSetter` in the GUI, and against direct parameter writes in tests.
@@ -300,8 +166,10 @@ mod tests {
 
     #[test]
     fn table_integrity() {
-        assert!(PRESETS.len() >= 2, "Init + at least one preset");
-        assert!(PRESETS[0].reset_all, "Init must be the first preset");
+        // The table ships empty; when entries return, Init must lead.
+        if !PRESETS.is_empty() {
+            assert!(PRESETS[0].reset_all, "Init must be the first preset");
+        }
 
         let mut names: Vec<_> = PRESETS.iter().map(|p| p.name).collect();
         names.sort_unstable();
@@ -419,7 +287,9 @@ mod tests {
         let chain = create_default_chain(&params);
         let _ = chain;
 
-        let init = &PRESETS[0];
+        let Some(init) = PRESETS.first() else {
+            return; // table ships empty; the contract holds once populated
+        };
         let mut sink = RecordingSink {
             enabled: HashMap::new(),
             written: Vec::new(),

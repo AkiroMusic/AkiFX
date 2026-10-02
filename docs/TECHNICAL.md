@@ -106,6 +106,9 @@ Factory presets (`src/presets.rs`) are a compile-time table of normalized
    keep the user's power state. `Init` is the single exception that resets
    every effect module to defaults and bypasses it.
 
+The table ships empty in this version — the bar grays out until entries
+return; adding presets is a data-only change.
+
 At runtime the GUI applies a preset through a `PatchSink` that drives
 nih-plug's `ParamSetter` (begin / set-normalized / end gesture groups, so
 host automation sees coherent moves) and then mirrors module power into the

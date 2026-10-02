@@ -13,8 +13,7 @@ application. Modules live in a rack you can reorder by dragging; every module
 can be powered on or off independently; the whole chain has one global bypass
 your DAW can automate.
 
-This manual covers the interface, every module, the factory presets, and
-troubleshooting. A companion document, [TECHNICAL.md](TECHNICAL.md), explains
+This manual covers the interface, every module, and troubleshooting. A companion document, [TECHNICAL.md](TECHNICAL.md), explains
 the underlying signal processing.
 
 ## 2 · Interface
@@ -23,7 +22,7 @@ the underlying signal processing.
 
 | Region | What it does |
 |---|---|
-| Title bar | Brand mark; **Preset bar** (‹ · dropdown · ›) for the factory presets; live **PDC** badge showing the chain latency in samples. |
+| Title bar | Brand mark; the **preset bar** slot (reserved); live **PDC** badge showing the chain latency in samples. |
 | Effect Rack (left) | The 11 modules in processing order. Click a name to select it, click its LED to power it on/off, drag the grip (≡) to reorder. Keyboard: arrows move, Home/End jump. Latency badges (e.g. `2048 smp`) mark modules that delay the signal. |
 | Module card (right) | The selected module's name, a one-line introduction, its power toggle with an ACTIVE/BYPASSED chip, and its parameters: sliders with gradient fill (bipolar ranges fill from the center), segmented selectors for enum choices, and pill switches for booleans. The Spectral Compressor adds a live spectrum panel with its threshold curve. |
 | Footer | **MASTER** section: global bypass pill (glows while engaged), master gain slider, L/R output meters (−60…+6 dBFS with 0 dB reference, red above 0 dB, click to clear the clip latch), UI zoom, About. |
@@ -45,9 +44,8 @@ passthrough) while the plugin stays loaded — automatable from the host.
 ## 4 · Quick start
 
 1. Insert AkiFX on a track.
-2. Open the Preset bar in the title bar and pick a recipe — *Warm Saturate* for tone, *Drum Glue* for cohesion, *Resonant Space* to get weird.
-3. Adjust the highlighted modules' sliders; the spectrum panel on the Spectral Compressor shows exactly where the threshold sits against your signal.
-4. Automate **Global Bypass** for A/B comparisons.
+2. Adjust the selected module's sliders; the spectrum panel on the Spectral Compressor shows exactly where the threshold sits against your signal.
+3. Automate **Global Bypass** for A/B comparisons.
 
 ## 5 · Signal chain
 
@@ -82,28 +80,9 @@ mouse wheel to nudge (hold Shift for fine steps). Every parameter has a tooltip.
 | **Gain** | Gain (−30…+30 dB) | Clean master gain stage. |
 | **Safety Limiter** | Threshold | Brickwall guard so experimentation cannot hurt anyone. |
 
-## 7 · Factory presets
-
-Ten presets ship with the plugin, ordered light → heavy. Presets never touch
-master gain, the Safety Limiter, or global bypass — output decisions stay
-yours. Presets do power on the modules they need.
-
-| Preset | Recipe | Why it sounds like this |
-|---|---|---|
-| **Init** | everything bypassed, defaults | Clean slate. |
-| **Clean Polish** | Crisp 25% amount + spectral compressor at 25% wet | A little sparkle; compression barely audible but cohesive. |
-| **Warm Saturate** | Soft Vacuum drive 40%, warmth 55%, 80% wet | Drive pushed past half of its range for audible but rounded tube harmonics; warmth biases the tone soft. |
-| **Vocal Air** | Crisp 32%, bright noise band | The noise exciter's high-pass sits high so only breath.register registers. |
-| **Drum Glue** | fast attack/release, 50% wet, threshold at center | Fast timing catches transients per-bin without pumping. |
-| **Spectral Gate Pad** | gate with tilt enabled | Frequency-tilted gating turns noise beds into moving textures. |
-| **Wide Bands** | 3-way crossover, low band lifted | Instant tonal rebalancing with phase-coherent splits. |
-| **Glitch Chop** | buffer stutter, 70% dry | Rhythmic repeats ride on top of the unprocessed signal. |
-| **Resonant Space** | Diopser, low cutoff, high resonance | The room becomes a pitch — the signature "weird" preset. |
-| **Full Suite** | saturation → exciter → spectral compression | The whole chain working together, each stage moderate. |
-
 ## 8 · Troubleshooting
 
-- **No sound after loading** — every module ships bypassed and the presets that need audio enable their own modules. Check module LEDs first, then the global bypass pill.
+- **No sound after loading** — every module ships bypassed. Check the module LEDs first, then the global bypass pill.
 - **The meters move but levels look small** — meters are peak dBFS on a −60…+6 scale; the 0 dB tick is full scale, not the top of the bar.
 - **Latency changed after reordering** — spectral modules delay by 2560 samples each (2048 FFT + 512 hop, conservative report). Your DAW's PDC uses the `PDC` badge value; leave plugin delay compensation enabled.
 - **Standalone has no input** — inputs are never auto-connected (feedback protection); pick one explicitly with `--input-device` if you need to process a live source.
@@ -119,7 +98,7 @@ yours. Presets do power on the modules they need.
 | Sample rates | follows host/device |
 | Latency | 2560 samples per powered spectral module (Spectral Gate, Frequency Shift, Spectral Compressor); reported to host |
 | Spectral engine | 2048-point FFT, 4× overlap, Hann window |
-| Presets | 10 factory presets (read-only), host state for everything else |
+| Presets | preset bar slot reserved (table ships empty) |
 | State | full parameter + module order + power state + UI zoom, saved by the host |
 | License | GPL-3.0 (see LICENSE); bundled fonts under the SIL OFL |
 
@@ -194,23 +173,6 @@ Sine Generator → Soft Vacuum → Crisp → Spectral Gate → Frequency Shift
 | **Buffr Glitch** | 干信号混合、力度敏感、八度移位、启动/释放/交叉淡化（ms） | MIDI 触发的缓冲重复卡顿效果。 |
 | **Gain** | 增益（−30…+30 dB） | 干净的主增益级。 |
 | **Safety Limiter** | 门限 | 砖墙保护，放心实验。 |
-
-## 7 · 工厂预设
-
-共 10 个，由轻到重。预设绝不触碰主增益、Safety Limiter 与全局旁路 —— 输出决策永远属于你；预设只会点亮它需要的模块。
-
-| 预设 | 配方 | 设定理由 |
-|---|---|---|
-| **Init** | 全部旁路、全默认 | 干净起点。 |
-| **Clean Polish** | Crisp 25% + 频谱压缩 25% 湿 | 一点光泽；压缩几乎不可闻但更凝聚。 |
-| **Warm Saturate** | Soft Vacuum Drive 40%、Warmth 55%、80% 湿 | Drive 推过半程才可闻且圆润；Warmth 偏软音色。 |
-| **Vocal Air** | Crisp 32%、噪声带偏高 | 噪声激励的高通偏高，只保留气声注册。 |
-| **Drum Glue** | 快启动/释放、50% 湿、门限居中 | 快时间常数逐 bin 抓瞬态而不抽吸。 |
-| **Spectral Gate Pad** | 门限 + Tilt 开启 | 频率倾斜门把噪声床变成流动质感。 |
-| **Wide Bands** | 三分频、低频带提升 | 相位相干分频的即时音色再平衡。 |
-| **Glitch Chop** | 缓冲卡顿、70% 干 | 节奏性重复叠在未处理信号上。 |
-| **Resonant Space** | Diopser 低截止高共振 | 房间变成音高 —— 招牌「变怪」预设。 |
-| **Full Suite** | 饱和 → 激励 → 频谱压缩 | 全链协同，每级都适度。 |
 
 ## 8 · 故障排查
 

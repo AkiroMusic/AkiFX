@@ -543,11 +543,11 @@ fn spaced_caps(text: &str) -> String {
     out
 }
 
-/// Power toggle pill: 44×24 track with an 18px knob, accent 12% fill when on.
+/// Power toggle pill: 52×28 track with a 20px knob, accent 12% fill when on.
 /// Returns the `Response` — call `.clicked()` on it to toggle.
 pub fn power_toggle(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let p = pal();
-    let desired_size = Vec2::new(44.0, 24.0);
+    let desired_size = Vec2::new(52.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -570,7 +570,7 @@ pub fn power_toggle(ui: &mut egui::Ui, on: bool) -> egui::Response {
         }
 
         // Knob
-        let knob_r = 8.0;
+        let knob_r = 10.0;
         let knob_y = rect.center().y;
         let knob_x = if on {
             rect.right() - knob_r - 3.0

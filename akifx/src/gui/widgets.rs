@@ -12,9 +12,9 @@ use nih_plug_egui::egui::{self, Align2, Color32, Pos2, Rect, Sense, Stroke, Stro
 use nih_plug::prelude::ParamSetter;
 
 /// Width of the monospace value readout on the right of a slider row.
-const READOUT_WIDTH: f32 = 78.0;
+const READOUT_WIDTH: f32 = 88.0;
 /// Slider track thickness (§12.7 progress rail).
-const TRACK_HEIGHT: f32 = 6.0;
+const TRACK_HEIGHT: f32 = 8.0;
 
 // ---------------------------------------------------------------------------
 // Pure interaction math (unit-tested below)
@@ -91,7 +91,7 @@ pub fn param_slider(
     mut apply: impl FnMut(SliderGesture, f32),
 ) -> egui::Response {
     let p = theme::pal();
-    let row_h = 26.0;
+    let row_h = 30.0;
     let avail = ui.available_width();
     let (row_rect, row_resp) =
         ui.allocate_exact_size(Vec2::new(avail, row_h), Sense::click_and_drag());
@@ -191,22 +191,22 @@ pub fn param_slider(
         let handle_x = track_rect.left() + track_rect.width() * shown;
         let handle_center = Pos2::new(handle_x, track_rect.center().y);
         if hovered || row_resp.dragged() {
-            paint::radial_glow(painter, handle_center, 12.0, p.accent, 0.18);
+            paint::radial_glow(painter, handle_center, 15.0, p.accent, 0.18);
         }
-        painter.circle_filled(handle_center, 5.0, p.surface_1);
+        painter.circle_filled(handle_center, 7.0, p.surface_1);
         let stroke_color = if row_resp.dragged() {
             p.accent_hover
         } else {
             p.accent
         };
-        painter.circle_stroke(handle_center, 5.0, Stroke::new(1.5, stroke_color));
+        painter.circle_stroke(handle_center, 7.0, Stroke::new(1.75, stroke_color));
 
         // Value readout (Plex Mono, primary text)
         painter.text(
             readout_pos,
             Align2::RIGHT_CENTER,
             readout,
-            theme::mono_semibold(14.0),
+            theme::mono_semibold(15.0),
             p.text_primary,
         );
     }
@@ -279,10 +279,10 @@ pub fn segmented(
             let pad_x = 10.0;
             let text_w = ui
                 .painter()
-                .layout_no_wrap(label.clone(), theme::mono(13.0), Color32::WHITE)
+                .layout_no_wrap(label.clone(), theme::mono(14.0), Color32::WHITE)
                 .size()
                 .x;
-            let size = Vec2::new(text_w + pad_x * 2.0, 28.0);
+            let size = Vec2::new(text_w + pad_x * 2.0, 32.0);
             let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
             if resp.clicked() {
                 select(idx);
@@ -304,7 +304,7 @@ pub fn segmented(
                     rect.center(),
                     Align2::CENTER_CENTER,
                     label.as_str(),
-                    theme::mono(13.0),
+                    theme::mono(14.0),
                     text_color,
                 );
             }
@@ -328,7 +328,7 @@ pub fn bool_switch(ui: &mut egui::Ui, value: bool, mut toggle: impl FnMut(bool))
         }
         ui.label(
             egui::RichText::new(if value { "ON" } else { "OFF" })
-                .font(theme::mono_medium(12.0))
+                .font(theme::mono_medium(13.0))
                 .color(if value { p.accent } else { p.text_tertiary }),
         );
         switch

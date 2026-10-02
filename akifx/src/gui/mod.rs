@@ -616,7 +616,34 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
 
             ui.add_space(theme::space::S3);
 
-            // PresetBar: previous · name dropdown · next
+            // PresetBar: previous · name dropdown · next. Ships empty — the
+            // controls gray out until the table has entries.
+            let presets = crate::presets::PRESETS;
+            if presets.is_empty() {
+                let (slot_rect, _) =
+                    ui.allocate_exact_size(Vec2::new(236.0, 28.0), egui::Sense::hover());
+                let painter = ui.painter_at(slot_rect);
+                painter.rect_filled(
+                    slot_rect,
+                    theme::radius::SM,
+                    theme::with_alpha(p.text_primary, 0.04),
+                );
+                painter.rect_stroke(
+                    slot_rect,
+                    theme::radius::SM,
+                    Stroke::new(1.0, theme::with_alpha(p.border, 0.7)),
+                    egui::StrokeKind::Inside,
+                );
+                painter.text(
+                    slot_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "Preset",
+                    theme::sans_medium(13.0),
+                    p.text_tertiary,
+                );
+                ui.allocate_rect(slot_rect, egui::Sense::hover())
+                    .on_hover_text("Factory presets \u{2014} reserved");
+            } else {
             let current = state.active_preset;
             let step = |delta: i32, ui: &mut egui::Ui, state: &mut EditorState, setter: &ParamSetter| {
                 let preset_count = crate::presets::PRESETS.len();
@@ -646,7 +673,6 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
                 .and_then(|i| crate::presets::PRESETS.get(i))
                 .map(|pr| pr.name)
                 .unwrap_or("Preset");
-            let presets = crate::presets::PRESETS;
             egui::ComboBox::from_id_salt("akifx_preset_bar")
                 .width(180.0)
                 .selected_text(selected_name)
@@ -676,6 +702,7 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
             );
             if prev_btn.on_hover_text("Previous preset").clicked() {
                 step(-1, ui, state, setter);
+            }
             }
         });
     });
@@ -859,7 +886,7 @@ fn render_rack_panel(
                         lift_painter.rect_filled(
                             row_rect,
                             CornerRadius::same(8),
-                            pal().surface_1,
+                            pal().surface_2,
                         );
                         lift_painter.rect_stroke(
                             row_rect,
@@ -875,32 +902,32 @@ fn render_rack_panel(
                         p.rect_filled(
                             row_rect,
                             CornerRadius::same(8),
-                            theme::with_alpha(pal().surface_1, lift_factor),
+                            theme::with_alpha(pal().surface_2, lift_factor),
                         );
                     }
                 } // drop painter borrow
 
                 // ── Row content — parent-scope zones (no child-UI!) ────
-                // T1: LED click zone (left 24px)
+                // T1: LED click zone (left 34px)
                 let led_zone = Rect::from_min_size(
                     row_rect.min,
-                    Vec2::new(24.0, row_h),
+                    Vec2::new(34.0, row_h),
                 );
                 let led_resp = ui.allocate_rect(led_zone, egui::Sense::click())
                     .on_hover_cursor(CursorIcon::PointingHand);
 
-                // T1: Grip drag zone (24px..48px)
+                // T1: Grip drag zone (34px..72px)
                 let grip_zone = Rect::from_min_size(
-                    Pos2::new(row_rect.left() + 24.0, row_rect.top()),
-                    Vec2::new(24.0, row_h),
+                    Pos2::new(row_rect.left() + 34.0, row_rect.top()),
+                    Vec2::new(38.0, row_h),
                 );
                 let grip_resp = ui.allocate_rect(grip_zone, egui::Sense::drag())
                     .on_hover_cursor(CursorIcon::Grab);
 
-                // T1: Selection strip (48px..right-8) — also drives is_hovered
+                // T1: Selection strip (72px..right-8) — also drives is_hovered
                 let sel_zone = Rect::from_min_size(
-                    Pos2::new(row_rect.left() + 48.0, row_rect.top()),
-                    Vec2::new((rack_w - 48.0 - 48.0 - 8.0).max(40.0), row_h),
+                    Pos2::new(row_rect.left() + 72.0, row_rect.top()),
+                    Vec2::new((rack_w - 48.0 - 72.0 - 8.0).max(40.0), row_h),
                 );
                 let sel_resp_zone = ui.allocate_rect(sel_zone, egui::Sense::click());
                 let is_hovered = !drag.active && !is_selected && sel_resp_zone.hovered();
@@ -941,16 +968,16 @@ fn render_rack_panel(
                     }
 
                     // Draw LED circle at zone center
-                    let led_center = Pos2::new(led_zone.left() + 12.0, led_zone.center().y);
+                    let led_center = Pos2::new(led_zone.left() + 15.0, led_zone.center().y);
                     if is_active {
-                        p.circle_filled(led_center, 4.0, pal().accent);
+                        p.circle_filled(led_center, 5.0, pal().accent);
                         p.circle_stroke(
                             led_center,
-                            6.0,
+                            8.0,
                             Stroke::new(2.0, theme::with_alpha(pal().accent, 0.6)),
                         );
                     } else {
-                        p.circle_filled(led_center, 4.0, pal().border);
+                        p.circle_filled(led_center, 5.0, pal().border);
                     }
 
                     // Draw grip lines
@@ -961,13 +988,13 @@ fn render_rack_panel(
                     };
                     let cx = grip_zone.center().x;
                     let cy = grip_zone.center().y;
-                    for dy in [-3.0f32, 0.0, 3.0] {
+                    for dy in [-6.0f32, -2.0, 2.0, 6.0] {
                         p.line_segment(
                             [
-                                Pos2::new(cx - 5.0, cy + dy),
-                                Pos2::new(cx + 5.0, cy + dy),
+                                Pos2::new(cx - 7.0, cy + dy),
+                                Pos2::new(cx + 7.0, cy + dy),
                             ],
-                            Stroke::new(1.5, grip_color),
+                            Stroke::new(2.0, grip_color),
                         );
                     }
 
@@ -979,10 +1006,10 @@ fn render_rack_panel(
                         pal().text_tertiary
                     };
                     p.text(
-                        Pos2::new(row_rect.left() + 52.0, row_rect.top() + row_h * 0.5),
+                        Pos2::new(row_rect.left() + 76.0, row_rect.top() + row_h * 0.5),
                         egui::Align2::LEFT_CENTER,
                         format!("{:>2}", pos + 1),
-                        theme::mono(11.0),
+                        theme::mono(12.0),
                         idx_color,
                     );
 
@@ -998,7 +1025,7 @@ fn render_rack_panel(
                             Pos2::new(row_rect.right() - 10.0, row_rect.top() + row_h * 0.5),
                             egui::Align2::RIGHT_CENTER,
                             text,
-                            theme::mono(10.5),
+                            theme::mono(11.0),
                             pal().accent_secondary,
                         );
                         w
@@ -1008,15 +1035,15 @@ fn render_rack_panel(
 
                     // Module name at x+72 — accent when selected (the pill
                     // carries selection), full brightness otherwise.
-                    let name_x = row_rect.left() + 72.0;
+                    let name_x = row_rect.left() + 102.0;
                     let name_max_w = row_rect.right() - 10.0 - badge_w - 12.0 - name_x;
                     let name_text =
-                        truncate_to_width(p, entry.name, theme::sans_medium(14.0), name_max_w);
+                        truncate_to_width(p, entry.name, theme::sans_semibold(15.0), name_max_w);
                     p.text(
                         Pos2::new(name_x, row_rect.top() + row_h * 0.5),
                         egui::Align2::LEFT_CENTER,
                         name_text,
-                        theme::sans_medium(14.0),
+                        theme::sans_semibold(15.0),
                         if is_selected { pal().accent } else { pal().text_primary },
                     );
                 } // drop painter borrow
@@ -1146,7 +1173,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
     // Module name heading (Fraunces SemiBold).
     ui.label(
         RichText::new(entry.name)
-            .font(theme::heading(24.0))
+            .font(theme::heading(26.0))
             .color(p.text_primary)
             .strong(),
     );
@@ -1155,7 +1182,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
     if let Some(intro) = descriptions::module_intro(entry.id_prefix) {
         ui.label(
             RichText::new(intro)
-                .font(theme::body(12.5))
+                .font(theme::body(13.5))
                 .color(p.text_secondary),
         );
     }
@@ -1170,7 +1197,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(humanize_name(entry.id_prefix))
-                .font(theme::sans_semibold(11.0))
+                .font(theme::sans_semibold(12.0))
                 .color(p.text_tertiary),
         );
         ui.add_space(8.0);
@@ -1195,7 +1222,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
         } else {
             ("BYPASSED", p.text_tertiary)
         };
-        ui.label(RichText::new(label).font(theme::sans_semibold(11.0)).color(color));
+        ui.label(RichText::new(label).font(theme::sans_semibold(12.0)).color(color));
     });
 
     ui.add_space(8.0);
@@ -1241,7 +1268,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
                 if Some(&label_text) != last_header.as_ref() {
                     ui.label(
                         RichText::new(label_text)
-                            .font(theme::body(13.5))
+                            .font(theme::body(14.5))
                             .color(p.text_secondary),
                     );
                 }
@@ -1586,7 +1613,7 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
     let peaks = [state.peak_l.load(Ordering::Relaxed), state.peak_r.load(Ordering::Relaxed)];
     let shown = [state.meter_db_l, state.meter_db_r];
 
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(230.0, 40.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(250.0, 44.0), egui::Sense::click());
     if resp.clicked() {
         state.clip_latched = false;
     }
@@ -1616,13 +1643,13 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
     let painter = ui.painter_at(rect);
     let db_x = |db: f32| -> f32 {
         let t = (db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB);
-        rect.left() + 26.0 + t.clamp(0.0, 1.0) * (rect.width() - 26.0 - 52.0)
+        rect.left() + 28.0 + t.clamp(0.0, 1.0) * (rect.width() - 28.0 - 58.0)
     };
 
     for i in 0..2 {
         let bar_db = if i == 0 { state.meter_db_l } else { state.meter_db_r };
-        let y = rect.top() + 6.0 + i as f32 * 14.0;
-        let h = 10.0f32;
+        let y = rect.top() + 7.0 + i as f32 * 15.0;
+        let h = 11.0f32;
         let track = Rect::from_min_max(
             Pos2::new(db_x(METER_MIN_DB), y),
             Pos2::new(db_x(METER_MAX_DB), y + h),
@@ -1654,7 +1681,7 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
             Pos2::new(rect.left() + 8.0, y + h * 0.5),
             egui::Align2::LEFT_CENTER,
             if i == 0 { "L" } else { "R" },
-            theme::mono_medium(10.5),
+            theme::mono_medium(11.5),
             p.text_secondary,
         );
         let db_text = if bar_db <= METER_MIN_DB + 0.5 {
@@ -1666,7 +1693,7 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
             Pos2::new(track.right() + 6.0, y + h * 0.5),
             egui::Align2::LEFT_CENTER,
             db_text,
-            theme::mono(10.5),
+            theme::mono(11.5),
             p.text_secondary,
         );
     }
@@ -1688,8 +1715,8 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
     // Latched clip bar across the top
     if state.clip_latched {
         let clip_rect = Rect::from_min_max(
-            Pos2::new(rect.left() + 26.0, rect.top() + 0.5),
-            Pos2::new(rect.right() - 52.0, rect.top() + 2.5),
+            Pos2::new(rect.left() + 28.0, rect.top() + 0.5),
+            Pos2::new(rect.right() - 58.0, rect.top() + 3.0),
         );
         painter.rect_filled(clip_rect, 1.0, p.error);
     }
@@ -1717,7 +1744,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
         // muted").
         let bypassed = state.params.global_bypass.value();
         let (bp_rect, bp_resp) =
-            ui.allocate_exact_size(Vec2::new(176.0, 32.0), egui::Sense::click());
+            ui.allocate_exact_size(Vec2::new(192.0, 36.0), egui::Sense::click());
         let bp_painter = ui.painter_at(bp_rect);
         bp_painter.rect_filled(
             bp_rect,
@@ -1747,7 +1774,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
             bp_rect.center(),
             egui::Align2::CENTER_CENTER,
             if bypassed { "GLOBAL BYPASS \u{00b7} ON" } else { "GLOBAL BYPASS \u{00b7} OFF" },
-            theme::mono_medium(12.5),
+            theme::mono_medium(14.0),
             if bypassed { p.warning } else { p.text_primary },
         );
         if bp_resp
@@ -1764,7 +1791,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
 
         // Master gain slider (same Aki slider as the param panel)
         ui.allocate_ui_with_layout(
-            Vec2::new(260.0, 32.0),
+            Vec2::new(280.0, 34.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 let gain_resp = widgets::float_slider(ui, setter, &state.params.gain.gain);
@@ -1785,7 +1812,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
             // About ghost button
             let about_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("About").font(theme::body(12.5)).color(p.text_secondary),
+                    RichText::new("About").font(theme::body(14.0)).color(p.text_secondary),
                 )
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::new(1.0, p.border)),
@@ -1808,12 +1835,12 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
             let zoom_btn = ui.add(
                 egui::Button::new(
                     RichText::new(zoom_label)
-                        .font(theme::mono_medium(12.5))
+                        .font(theme::mono_medium(14.0))
                         .color(p.text_secondary),
                 )
                 .fill(theme::with_alpha(p.text_primary, 0.06))
                 .stroke(Stroke::new(1.0, p.border))
-                .min_size(Vec2::new(64.0, 26.0)),
+                .min_size(Vec2::new(72.0, 28.0)),
             );
             if zoom_btn
                 .on_hover_text("UI zoom \u{2014} click to cycle AUTO/60\u{2013}200% (AUTO follows the system display scale)")
