@@ -10,13 +10,13 @@
 use nih_plug::prelude::*;
 use nih_plug_egui::egui::{self, Color32, CornerRadius, CursorIcon, LayerId, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use nih_plug_egui::egui::layers::Order;
-use nih_plug_egui::widgets::ParamSlider;
 use nih_plug_egui::{create_egui_editor, resizable_window::ResizableWindow, EguiState};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 mod paint;
 mod theme;
+mod widgets;
 pub mod descriptions;
 pub mod state;
 
@@ -968,35 +968,56 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &EditorSta
         });
 }
 
-/// Render a single parameter with the appropriate widget.
+/// Render a single parameter with the appropriate Aki widget: ramp-gradient
+/// slider (float/int), segmented selector (enum, when the variant count fits),
+/// or pill switch (bool).
 ///
 /// # Safety
 ///
 /// `param_ptr` must point to a valid parameter.
 unsafe fn render_param_widget(ui: &mut egui::Ui, setter: &ParamSetter, param_ptr: &ParamPtr) -> egui::Response {
     match param_ptr {
-        ParamPtr::FloatParam(p) => {
-            ui.add(ParamSlider::for_param(&**p, setter))
-        }
-        ParamPtr::IntParam(p) => {
-            ui.add(ParamSlider::for_param(&**p, setter))
-        }
+        ParamPtr::FloatParam(p) => widgets::float_slider(ui, setter, &**p),
+        ParamPtr::IntParam(p) => widgets::int_slider(ui, setter, &**p),
         ParamPtr::BoolParam(p) => {
-            // Boolean parameters render as a single toggle button: pressed =
-            // on. (Sliders for on/off values were clumsy to grab and drag.)
             let param = unsafe { &**p };
             let value = param.value();
-            let name = param.name();
-            let response = ui
-                .selectable_label(value, format!("{name}: {}", if value { "On" } else { "Off" }))
-                .on_hover_text(name);
-            if response.clicked() {
-                setter.set_parameter(param, !value);
-            }
-            response
+            widgets::bool_switch(ui, value, |v| {
+                setter.begin_set_parameter(param);
+                setter.set_parameter(param, v);
+                setter.end_set_parameter(param);
+            })
         }
         ParamPtr::EnumParam(p) => {
-            ui.add(ParamSlider::for_param(&**p, setter))
+            let param = unsafe { &**p };
+            // Segmented selector when the variant count fits a row; a plain
+            // normalized slider otherwise.
+            let steps = param.step_count();
+            if let Some(k) = steps.filter(|k| *k > 0 && *k <= 7) {
+                let current = (param.modulated_normalized_value() * k as f32).round().clamp(0.0, k as f32) as usize;
+                let options: Vec<String> = (0..=k)
+                    .map(|i| param.normalized_value_to_string(i as f32 / k as f32, false))
+                    .collect();
+                widgets::segmented(ui, current, &options, |idx| {
+                    setter.begin_set_parameter(param);
+                    setter.set_parameter(param, idx as i32);
+                    setter.end_set_parameter(param);
+                })
+            } else {
+                let value = param.modulated_normalized_value();
+                widgets::param_slider(
+                    ui,
+                    value,
+                    param.default_normalized_value(),
+                    false,
+                    &param.normalized_value_to_string(value, true),
+                    |g, n| match g {
+                        widgets::SliderGesture::Begin => setter.begin_set_parameter(param),
+                        widgets::SliderGesture::Set => setter.set_parameter_normalized(param, n),
+                        widgets::SliderGesture::End => setter.end_set_parameter(param),
+                    },
+                )
+            }
         }
     }
 }
@@ -1205,11 +1226,15 @@ fn render_bottom_strip(
 
             ui.add_space(12.0);
 
-            // Master gain slider
-            let gain_resp = ui.add(
-                ParamSlider::for_param(&state.params.gain.gain, setter).with_width(180.0),
+            // Master gain slider (same Aki slider as the param panel)
+            ui.allocate_ui_with_layout(
+                Vec2::new(220.0, 24.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let gain_resp = widgets::float_slider(ui, setter, &state.params.gain.gain);
+                    gain_resp.on_hover_text("Master output gain");
+                },
             );
-            gain_resp.on_hover_text("Master output gain");
 
             ui.add_space(12.0);
 

@@ -247,7 +247,7 @@ pub fn shimmer_edge(painter: &Painter, rect: Rect, t: f32) {
 }
 
 /// Horizontal gradient band (one mesh quad strip) from `from` to `to`.
-fn gradient_band(painter: &Painter, rect: Rect, from: Color32, to: Color32) {
+pub fn gradient_band(painter: &Painter, rect: Rect, from: Color32, to: Color32) {
     let p = theme::pal();
     const SEGMENTS: usize = 24;
     // Alpha envelope: fade at both ends, bright in the middle
