@@ -12,7 +12,7 @@ use nih_plug_egui::egui::{self, Align2, Color32, Pos2, Rect, Sense, Stroke, Stro
 use nih_plug::prelude::ParamSetter;
 
 /// Width of the monospace value readout on the right of a slider row.
-const READOUT_WIDTH: f32 = 64.0;
+const READOUT_WIDTH: f32 = 78.0;
 /// Slider track thickness (§12.7 progress rail).
 const TRACK_HEIGHT: f32 = 6.0;
 
@@ -91,7 +91,7 @@ pub fn param_slider(
     mut apply: impl FnMut(SliderGesture, f32),
 ) -> egui::Response {
     let p = theme::pal();
-    let row_h = 22.0;
+    let row_h = 26.0;
     let avail = ui.available_width();
     let (row_rect, row_resp) =
         ui.allocate_exact_size(Vec2::new(avail, row_h), Sense::click_and_drag());
@@ -206,12 +206,25 @@ pub fn param_slider(
             readout_pos,
             Align2::RIGHT_CENTER,
             readout,
-            theme::mono_semibold(12.5),
+            theme::mono_semibold(14.0),
             p.text_primary,
         );
     }
 
     row_resp
+}
+
+/// Format a parameter's value for the slider readout with exactly one unit:
+/// some formatters already embed the unit, so ask the formatter for a bare
+/// value and append `Param::unit()` only when missing.
+fn readout_with_unit<P: Param>(param: &P, normalized: f32) -> String {
+    let text = param.normalized_value_to_string(normalized, false);
+    let unit = param.unit().trim();
+    if unit.is_empty() || text.trim_end().ends_with(unit) {
+        text
+    } else {
+        format!("{text} {unit}")
+    }
 }
 
 /// [`param_slider`] wired to a [`FloatParam`] through the setter.
@@ -220,7 +233,7 @@ pub fn float_slider(ui: &mut egui::Ui, setter: &ParamSetter, param: &FloatParam)
     let default = param.default_normalized_value();
     let min = param.range().unnormalize(0.0);
     let max = param.range().unnormalize(1.0);
-    let readout = param.normalized_value_to_string(value, true);
+    let readout = readout_with_unit(param, value);
     param_slider(ui, value, default, is_bipolar(min, max), &readout, |g, n| match g {
         SliderGesture::Begin => setter.begin_set_parameter(param),
         SliderGesture::Set => setter.set_parameter_normalized(param, n),
@@ -234,7 +247,7 @@ pub fn int_slider(ui: &mut egui::Ui, setter: &ParamSetter, param: &IntParam) -> 
     let default = param.default_normalized_value();
     let min = param.range().unnormalize(0.0) as f32;
     let max = param.range().unnormalize(1.0) as f32;
-    let readout = param.normalized_value_to_string(value, true);
+    let readout = readout_with_unit(param, value);
     param_slider(ui, value, default, is_bipolar(min, max), &readout, |g, n| match g {
         SliderGesture::Begin => setter.begin_set_parameter(param),
         SliderGesture::Set => setter.set_parameter_normalized(param, n),
@@ -266,10 +279,10 @@ pub fn segmented(
             let pad_x = 10.0;
             let text_w = ui
                 .painter()
-                .layout_no_wrap(label.clone(), theme::mono(12.0), Color32::WHITE)
+                .layout_no_wrap(label.clone(), theme::mono(13.0), Color32::WHITE)
                 .size()
                 .x;
-            let size = Vec2::new(text_w + pad_x * 2.0, 24.0);
+            let size = Vec2::new(text_w + pad_x * 2.0, 28.0);
             let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
             if resp.clicked() {
                 select(idx);
@@ -291,7 +304,7 @@ pub fn segmented(
                     rect.center(),
                     Align2::CENTER_CENTER,
                     label.as_str(),
-                    theme::mono(12.0),
+                    theme::mono(13.0),
                     text_color,
                 );
             }
@@ -315,7 +328,7 @@ pub fn bool_switch(ui: &mut egui::Ui, value: bool, mut toggle: impl FnMut(bool))
         }
         ui.label(
             egui::RichText::new(if value { "ON" } else { "OFF" })
-                .font(theme::mono_medium(11.0))
+                .font(theme::mono_medium(12.0))
                 .color(if value { p.accent } else { p.text_tertiary }),
         );
         switch

@@ -119,7 +119,8 @@ language. Architecture notes:
 - **One color pack, zero hardcoded colors.** `gui/theme.rs` defines
   `ColorPack` (surfaces, text tiers, accents, status, the three-color gradient
   ramp, aurora intensities, liquid-glass material tokens, shadow tint). The
-  active pack is *Aurora Dusk*; adding a theme means adding one struct —
+  active pack is *Mint Fresh* (the family light theme, §3.4); adding a
+  theme means adding one struct —
   component code reads `pal()` only. Derived colors go through `mix()` /
   `with_alpha()` (the `color-mix()` equivalents).
 - **Three font families**, all embedded OFL TTFs validated by sfnt magic
@@ -268,7 +269,7 @@ Spectral Compressor 本体运行上游移植的 realfft 重叠相加管线：对
 
 - **一个配色包，零裸色值。** `gui/theme.rs` 定义 `ColorPack`（表面、三级
   文字、强调色、状态色、三色渐变坡道、极光光强、液态玻璃材质令牌、阴影
-  色调）。当前启用 *Aurora Dusk*；新增主题 = 增加一个 struct —— 组件代码
+  色调）。当前启用 *Mint Fresh*（家族浅色主题，§3.4）；新增主题 = 增加一个 struct —— 组件代码
   只读 `pal()`。派生色一律经 `mix()` / `with_alpha()`（`color-mix()` 等价物）。
 - **三字体家族**，全部内嵌 OFL TTF，注册前以 sfnt magic 校验（坏字体会
   在宿主进程内 panic）：Plus Jakarta Sans（UI 文字）、Fraunces 72pt

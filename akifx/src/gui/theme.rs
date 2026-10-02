@@ -94,56 +94,80 @@ pub struct ColorPack {
     pub shadow_tint: Color32,
 }
 
-/// Dark · Aurora Dusk — the primary pack. Blue-teal deep base, cold cyan and
-/// blue-violet aurora breathing on it. Values transcribed verbatim from the
-/// design system (§3.2 + appendix B dark tokens).
-pub static AURORA_DUSK: ColorPack = ColorPack {
-    name: "Aurora Dusk",
-    dark: true,
+/// Light · Mint Fresh — the family pack. Low-saturation, high-luminance
+/// cream-green base with breathing grass tones; deep ink-green carries text
+/// and the dark contrast anchor. Values transcribed verbatim from the
+/// design system (§3.4 + appendix B mint tokens).
+pub static MINT_FRESH: ColorPack = ColorPack {
+    name: "Mint Fresh",
+    dark: false,
 
-    bg_base: Color32::from_rgb(0x0C, 0x12, 0x20),
-    surface_1: Color32::from_rgb(0x15, 0x1C, 0x2C),
-    surface_2: Color32::from_rgb(0x1E, 0x28, 0x39),
-    surface_contrast: Color32::from_rgb(0x06, 0x0A, 0x14),
-    border: Color32::from_rgb(0x2B, 0x38, 0x52),
+    bg_base: Color32::from_rgb(0xE8, 0xF0, 0xE5),
+    surface_1: Color32::from_rgb(0xF4, 0xF8, 0xF0),
+    surface_2: Color32::from_rgb(0xDC, 0xE7, 0xDA),
+    surface_contrast: Color32::from_rgb(0x22, 0x36, 0x2A),
+    border: Color32::from_rgb(0xC9, 0xD8, 0xC6),
 
-    text_primary: Color32::from_rgb(0xEE, 0xF2, 0xF8),
-    text_secondary: Color32::from_rgb(0x8C, 0x97, 0xAC),
-    text_tertiary: Color32::from_rgb(0x5A, 0x64, 0x78),
-    text_on_contrast: Color32::from_rgb(0xEE, 0xF2, 0xF8),
+    text_primary: Color32::from_rgb(0x2F, 0x4A, 0x3A),
+    text_secondary: Color32::from_rgb(0x6B, 0x72, 0x68),
+    text_tertiary: Color32::from_rgb(0x98, 0xA6, 0x9A),
+    text_on_contrast: Color32::from_rgb(0xE8, 0xF0, 0xE5),
 
-    accent: Color32::from_rgb(0x6D, 0x82, 0xFF),
-    accent_hover: Color32::from_rgb(0x8A, 0x9B, 0xFF),
-    accent_secondary: Color32::from_rgb(0x2C, 0xC5, 0xE0),
-    accent_tertiary: Color32::from_rgb(0xF0, 0xA0, 0xD8),
+    accent: Color32::from_rgb(0x3D, 0x62, 0x4C),
+    accent_hover: Color32::from_rgb(0x32, 0x51, 0x3F),
+    accent_secondary: Color32::from_rgb(0x8F, 0xA8, 0x9A),
+    accent_tertiary: Color32::from_rgb(0xD9, 0xA3, 0x8E),
 
-    success: Color32::from_rgb(0x4F, 0xAE, 0x8A),
-    error: Color32::from_rgb(0xD9, 0x69, 0x5F),
-    warning: Color32::from_rgb(0xE8, 0xA3, 0x3D),
+    success: Color32::from_rgb(0x4E, 0x8F, 0x68),
+    error: Color32::from_rgb(0xC4, 0x58, 0x4E),
+    warning: Color32::from_rgb(0xC0, 0x8A, 0x3D),
 
-    grad_a: Color32::from_rgb(0x48, 0x60, 0xD9),
-    grad_b: Color32::from_rgb(0x2C, 0xC5, 0xE0),
-    grad_c: Color32::from_rgb(0xC4, 0xA8, 0xF5),
+    grad_a: Color32::from_rgb(0x8F, 0xA8, 0x9A),
+    grad_b: Color32::from_rgb(0xA3, 0xC4, 0xA9),
+    grad_c: Color32::from_rgb(0xB5, 0xD7, 0xC3),
 
-    aurora: [0.30, 0.22, 0.14, 0.10],
+    aurora: [0.15, 0.10, 0.06, 0.04],
 
     // Material tokens as premultiplied constants (`from_rgba_unmultiplied`
     // is not const). Premultiply math: rgb × a/255.
-    // liquid_bg    = rgba(21, 28, 44, 0.60) → (12, 16, 26, 153)
-    // glass_bg     = rgba(21, 28, 44, 0.62) → (13, 17, 27, 158)
-    liquid_bg: Color32::from_rgba_premultiplied(12, 16, 26, 153),
-    liquid_border: Color32::from_rgba_premultiplied(23, 23, 23, 23),
-    specular: Color32::from_rgba_premultiplied(26, 26, 26, 26),
-    inner_shade: Color32::from_rgba_premultiplied(0, 0, 0, 56),
-    bezel_inner_line: Color32::from_rgba_premultiplied(11, 11, 11, 11),
-    glass_bg: Color32::from_rgba_premultiplied(13, 17, 27, 158),
-    shadow_tint: Color32::from_rgb(0x04, 0x06, 0x0C),
+    // liquid_bg        = rgba(255, 255, 255, 0.55) → (140, 140, 140, 140)
+    // liquid_border    = rgba(255, 255, 255, 0.65) → (166, 166, 166, 166)
+    // specular         = rgba(255, 255, 255, 0.85) → (217, 217, 217, 217)
+    // inner_shade      = rgba(47, 58, 50, 0.08)    → (4, 5, 4, 20)
+    // glass_bg         = rgba(244, 248, 240, 0.68) → (166, 168, 163, 173)
+    liquid_bg: Color32::from_rgba_premultiplied(140, 140, 140, 140),
+    liquid_border: Color32::from_rgba_premultiplied(166, 166, 166, 166),
+    specular: Color32::from_rgba_premultiplied(217, 217, 217, 217),
+    inner_shade: Color32::from_rgba_premultiplied(4, 5, 4, 20),
+    bezel_inner_line: Color32::from_rgba_premultiplied(0, 0, 0, 10),
+    glass_bg: Color32::from_rgba_premultiplied(166, 168, 163, 173),
+    shadow_tint: Color32::from_rgb(0x2F, 0x3A, 0x32),
 };
 
 /// The active color pack. Adding a theme later = adding another `ColorPack`
 /// here plus a picker; no component code changes.
 pub fn pal() -> &'static ColorPack {
-    &AURORA_DUSK
+    &MINT_FRESH
+}
+
+/// Flow-border / glow color for the current theme. On light themes the ramp
+/// must be darkened for arcs and thin lines (§6.4.3: 75% ramp + 25% black).
+pub fn flow_color(c: Color32) -> Color32 {
+    if pal().dark {
+        c
+    } else {
+        mix(c, Color32::BLACK, 0.25)
+    }
+}
+
+/// Grain color for the noise overlay: white grain on dark themes, black
+/// grain on light themes (same 0–9/255 alpha band).
+pub fn grain_color() -> Color32 {
+    if pal().dark {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +273,11 @@ pub fn mono_semibold(size: f32) -> egui::FontId {
 /// Rewrite the egui dark theme using Aurora Dusk tokens.
 pub fn configure_visuals(ctx: &egui::Context) {
     let p = pal();
-    let mut v = egui::Visuals::dark();
+    let mut v = if p.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
 
     // Base fills stay transparent — the painted aurora curtain shows through.
     v.panel_fill = Color32::TRANSPARENT;
@@ -303,11 +331,11 @@ pub fn configure_visuals(ctx: &egui::Context) {
 /// level changes (baseview ignores `pixels_per_point`, so zoom = font sizes).
 pub fn apply_text_styles(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(egui::TextStyle::Body, body(13.0));
-    style.text_styles.insert(egui::TextStyle::Button, sans_medium(13.0));
-    style.text_styles.insert(egui::TextStyle::Heading, heading(20.0));
-    style.text_styles.insert(egui::TextStyle::Small, body(12.0));
-    style.text_styles.insert(egui::TextStyle::Monospace, mono(12.0));
+    style.text_styles.insert(egui::TextStyle::Body, body(14.0));
+    style.text_styles.insert(egui::TextStyle::Button, sans_medium(14.0));
+    style.text_styles.insert(egui::TextStyle::Heading, heading(22.0));
+    style.text_styles.insert(egui::TextStyle::Small, body(13.0));
+    style.text_styles.insert(egui::TextStyle::Monospace, mono(13.0));
     ctx.set_style(style);
 }
 
@@ -445,7 +473,7 @@ pub fn load_fonts(ctx: &egui::Context) {
 /// capitals with hair spaces.
 pub fn eyebrow(text: &str) -> RichText {
     RichText::new(spaced_caps(text))
-        .font(sans_semibold(10.0))
+        .font(sans_semibold(11.0))
         .color(pal().text_tertiary)
 }
 
@@ -453,7 +481,7 @@ pub fn eyebrow(text: &str) -> RichText {
 /// are already humanized).
 pub fn eyebrow_raw(text: &str) -> RichText {
     RichText::new(text.to_string())
-        .font(sans_semibold(10.0))
+        .font(sans_semibold(11.0))
         .color(pal().text_tertiary)
 }
 
@@ -469,11 +497,11 @@ fn spaced_caps(text: &str) -> String {
     out
 }
 
-/// Power toggle pill: 40×22 track with a 16px knob, accent 12% fill when on.
+/// Power toggle pill: 44×24 track with an 18px knob, accent 12% fill when on.
 /// Returns the `Response` — call `.clicked()` on it to toggle.
 pub fn power_toggle(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let p = pal();
-    let desired_size = Vec2::new(40.0, 22.0);
+    let desired_size = Vec2::new(44.0, 24.0);
     let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
 
     if ui.is_rect_visible(rect) {
@@ -496,7 +524,7 @@ pub fn power_toggle(ui: &mut egui::Ui, on: bool) -> egui::Response {
         }
 
         // Knob
-        let knob_r = 7.0;
+        let knob_r = 8.0;
         let knob_y = rect.center().y;
         let knob_x = if on {
             rect.right() - knob_r - 3.0
@@ -518,8 +546,8 @@ mod tests {
     #[test]
     fn aurora_dusk_tokens_are_distinct() {
         let p = pal();
-        assert_eq!(p.name, "Aurora Dusk");
-        assert!(p.dark);
+        assert_eq!(p.name, "Mint Fresh");
+        assert!(!p.dark);
         assert_ne!(p.bg_base, p.surface_1);
         assert_ne!(p.surface_1, p.surface_2);
         assert_ne!(p.text_primary, p.text_secondary);

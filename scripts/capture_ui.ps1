@@ -2,7 +2,7 @@
 # Usage:
 #   pwsh scripts/capture_ui.ps1 -ExePath target/release/akifx.exe -OutPng shot.png `
 #       [-Clicks "36,123;150,293"] [-Seconds 3]
-# Clicks are editor-logical coordinates (1100x720 design space); they are
+# Clicks are editor-logical coordinates (1280x800 design space); they are
 # scaled by the window's actual client size. Used to enable modules / select
 # the Spectral Compressor before the shot. The window is made topmost and the
 # screen region is copied — GL windows do not blit through PrintWindow.
@@ -26,6 +26,7 @@ public class Win32Capture {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT p);
     public struct RECT { public int Left, Top, Right, Bottom; }
     public struct POINT { public int X, Y; }
 }
@@ -56,7 +57,7 @@ try {
     [Win32Capture]::GetWindowRect($hwnd, [ref]$win) | Out-Null
     $clientW = $client.Right - $client.Left
     $clientH = $client.Bottom - $client.Top
-    $scale = $clientW / 1100.0
+    $scale = $clientW / 1280.0
     # Frame offset between window rect and client rect
     $offX = ($win.Right - $win.Left - $clientW) / 2
     $offY = ($win.Bottom - $win.Top - $clientH) - $offX # bottom border == top border
@@ -86,16 +87,20 @@ try {
 
     Start-Sleep -Seconds $Seconds
 
-    # Copy the client region straight from the composited screen.
-    $bmp = New-Object System.Drawing.Bitmap($clientW, $clientH)
+    # Copy the whole window rect from the composited screen (clicks use the
+    # client origin above; the capture includes the OS frame, which the
+    # reviewer is told to ignore).
+    $winW = $win.Right - $win.Left
+    $winH = $win.Bottom - $win.Top
+    $bmp = New-Object System.Drawing.Bitmap($winW, $winH)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.CopyFromScreen($originX, $originY, 0, 0, (New-Object System.Drawing.Size($clientW, $clientH)))
+    $g.CopyFromScreen($win.Left, $win.Top, 0, 0, (New-Object System.Drawing.Size($winW, $winH)))
     $g.Dispose()
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutPng) | Out-Null
     $bmp.Save($OutPng, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
-    Write-Output "saved: $OutPng ($clientW x $clientH)"
+    Write-Output "saved: $OutPng ($winW x $winH window)"
 }
 finally {
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }

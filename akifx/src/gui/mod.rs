@@ -30,13 +30,13 @@ use theme::pal;
 // ---------------------------------------------------------------------------
 
 /// Default window dimensions (width, height).
-const DEFAULT_SIZE: (u32, u32) = (1100, 720);
+const DEFAULT_SIZE: (u32, u32) = (1280, 800);
 /// Row height for each rack entry.
-const ROW_HEIGHT: f32 = 34.0;
+const ROW_HEIGHT: f32 = 40.0;
 /// Title bar height.
-const TOP_BAR_HEIGHT: f32 = 48.0;
+const TOP_BAR_HEIGHT: f32 = 54.0;
 /// Footer height.
-const FOOTER_HEIGHT: f32 = 56.0;
+const FOOTER_HEIGHT: f32 = 62.0;
 
 /// Peak-meter display range (dBFS) and per-frame decay.
 const METER_MIN_DB: f32 = -60.0;
@@ -47,7 +47,7 @@ const METER_DECAY_DB_PER_FRAME: f32 = 1.9;
 ///
 /// Narrow windows (< 950px) get a compact 230px rack; wider windows get 280px.
 fn rack_width(w: f32) -> f32 {
-    if w < 950.0 { 230.0 } else { 280.0 }
+    if w < 1050.0 { 250.0 } else { 300.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +303,7 @@ pub fn create_editor(
             }
 
             ResizableWindow::new("akifx_resize")
-                .min_size(Vec2::new(900.0, 600.0))
+                .min_size(Vec2::new(1040.0, 680.0))
                 .show(ctx, egui_state_for_resize.as_ref(), |ui| {
                     render_editor(ui, setter, user_state);
                 });
@@ -405,7 +405,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
         egui::Window::new("About AkiFX")
             .collapsible(false)
             .resizable(false)
-            .default_width(400.0)
+            .default_width(460.0)
             .frame(
                 egui::Frame::NONE
                     .fill(p.liquid_bg)
@@ -418,7 +418,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new(format!("AkiFX v{}", env!("CARGO_PKG_VERSION")))
-                            .font(theme::heading(14.0))
+                            .font(theme::heading(17.0))
                             .color(p.text_primary)
                             .strong(),
                     );
@@ -429,7 +429,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                              SpectralSuite (Unlicense) and Robbert van der Helm's \
                              NIH-plug plugins (ISC/GPLv3).",
                         )
-                        .font(theme::body(11.0))
+                        .font(theme::body(12.5))
                         .color(p.text_secondary),
                     );
                     ui.add_space(4.0);
@@ -437,7 +437,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                         RichText::new(
                             "Airwindows Hard Vacuum port credit: Chris Johnson.",
                         )
-                        .font(theme::body(11.0))
+                        .font(theme::body(12.5))
                         .color(p.text_secondary),
                     );
                     // Signature quote line (one per app)
@@ -450,7 +450,7 @@ fn render_editor(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
                     ui.label(
                         RichText::new("\u{201c}The space between notes is where \
                             the story lives.\u{201d}")
-                            .font(theme::display_italic(11.0))
+                            .font(theme::display_italic(13.0))
                             .color(p.text_tertiary),
                     );
                 });
@@ -528,7 +528,7 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
         ui.add_space(theme::space::S4);
 
         // Signature star with bloom-in animation (seeded at editor open)
-        let star_size = 16.0;
+        let star_size = 18.0;
         let (star_rect, _) =
             ui.allocate_exact_size(Vec2::new(star_size, star_size), egui::Sense::hover());
         let bloom = ui
@@ -551,7 +551,7 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
         // AkiFX wordmark (Fraunces SemiBold)
         ui.label(
             RichText::new("AkiFX")
-                .font(theme::heading(22.0))
+                .font(theme::heading(25.0))
                 .color(p.text_primary)
                 .strong(),
         );
@@ -572,7 +572,7 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
                 .sum();
             ui.label(
                 RichText::new(format!("PDC {} smp", total_latency))
-                    .font(theme::mono(11.0))
+                    .font(theme::mono(12.5))
                     .color(p.text_secondary),
             )
             .on_hover_text(
@@ -598,10 +598,10 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
             // this is the NEXT stepper (›) as seen on screen.
             let next_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("\u{203a}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
+                    RichText::new("\u{203a}").font(theme::sans_semibold(17.0)).color(p.text_secondary),
                 )
                 .fill(Color32::TRANSPARENT)
-                .min_size(Vec2::new(24.0, 24.0)),
+                .min_size(Vec2::new(28.0, 28.0)),
             );
             if next_btn.on_hover_text("Next preset").clicked() {
                 step(1, ui, state, setter);
@@ -613,7 +613,7 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
                 .unwrap_or("Preset");
             let presets = crate::presets::PRESETS;
             egui::ComboBox::from_id_salt("akifx_preset_bar")
-                .width(150.0)
+                .width(180.0)
                 .selected_text(selected_name)
                 .show_ui(ui, |ui| {
                     for (i, pr) in presets.iter().enumerate() {
@@ -634,10 +634,10 @@ fn render_title_bar(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorS
             // second-added = leftmost on screen: the PREVIOUS stepper (‹).
             let prev_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("\u{2039}").font(theme::sans_semibold(15.0)).color(p.text_secondary),
+                    RichText::new("\u{2039}").font(theme::sans_semibold(17.0)).color(p.text_secondary),
                 )
                 .fill(Color32::TRANSPARENT)
-                .min_size(Vec2::new(24.0, 24.0)),
+                .min_size(Vec2::new(28.0, 28.0)),
             );
             if prev_btn.on_hover_text("Previous preset").clicked() {
                 step(-1, ui, state, setter);
@@ -934,7 +934,7 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                         Pos2::new(row_rect.left() + 52.0, row_rect.top() + ROW_HEIGHT * 0.5),
                         egui::Align2::LEFT_CENTER,
                         format!("{:>2}", pos + 1),
-                        theme::mono(10.0),
+                        theme::mono(11.0),
                         idx_color,
                     );
 
@@ -943,14 +943,14 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     let badge_w = if entry.latency_samples > 0 {
                         let text = format!("{} smp", entry.latency_samples);
                         let w = p
-                            .layout_no_wrap(text.clone(), theme::mono(9.5), Color32::WHITE)
+                            .layout_no_wrap(text.clone(), theme::mono(10.5), Color32::WHITE)
                             .size()
                             .x;
                         p.text(
                             Pos2::new(row_rect.right() - 10.0, row_rect.top() + ROW_HEIGHT * 0.5),
                             egui::Align2::RIGHT_CENTER,
                             text,
-                            theme::mono(9.5),
+                            theme::mono(10.5),
                             pal().accent_secondary,
                         );
                         w
@@ -963,12 +963,12 @@ fn render_rack_panel(ui: &mut egui::Ui, state: &mut EditorState, rack_w: f32) {
                     let name_x = row_rect.left() + 72.0;
                     let name_max_w = row_rect.right() - 10.0 - badge_w - 12.0 - name_x;
                     let name_text =
-                        truncate_to_width(p, entry.name, theme::sans_medium(12.5), name_max_w);
+                        truncate_to_width(p, entry.name, theme::sans_medium(14.0), name_max_w);
                     p.text(
                         Pos2::new(name_x, row_rect.top() + ROW_HEIGHT * 0.5),
                         egui::Align2::LEFT_CENTER,
                         name_text,
-                        theme::sans_medium(12.5),
+                        theme::sans_medium(14.0),
                         if is_selected { pal().accent } else { pal().text_primary },
                     );
                 } // drop painter borrow
@@ -1087,7 +1087,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
         ui.add_space(16.0);
         ui.label(
             RichText::new("No module selected.")
-                .font(theme::body(12.0))
+                .font(theme::body(13.0))
                 .color(p.text_tertiary),
         );
         return;
@@ -1098,7 +1098,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
     // Module name heading (Fraunces SemiBold).
     ui.label(
         RichText::new(entry.name)
-            .font(theme::heading(20.0))
+            .font(theme::heading(24.0))
             .color(p.text_primary)
             .strong(),
     );
@@ -1107,7 +1107,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
     if let Some(intro) = descriptions::module_intro(entry.id_prefix) {
         ui.label(
             RichText::new(intro)
-                .font(theme::body(11.0))
+                .font(theme::body(12.5))
                 .color(p.text_secondary),
         );
     }
@@ -1122,7 +1122,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(humanize_name(entry.id_prefix))
-                .font(theme::sans_semibold(10.0))
+                .font(theme::sans_semibold(11.0))
                 .color(p.text_tertiary),
         );
         ui.add_space(8.0);
@@ -1147,7 +1147,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
         } else {
             ("BYPASSED", p.text_tertiary)
         };
-        ui.label(RichText::new(label).font(theme::sans_semibold(10.0)).color(color));
+        ui.label(RichText::new(label).font(theme::sans_semibold(11.0)).color(color));
     });
 
     ui.add_space(8.0);
@@ -1193,7 +1193,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
                 if Some(&label_text) != last_header.as_ref() {
                     ui.label(
                         RichText::new(label_text)
-                            .font(theme::body(12.0))
+                            .font(theme::body(13.5))
                             .color(p.text_secondary),
                     );
                 }
@@ -1214,7 +1214,7 @@ fn render_param_panel(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut Edito
                 ui.add_space(16.0);
                 ui.label(
                     RichText::new("No parameters available for this module.")
-                        .font(theme::body(11.0))
+                        .font(theme::body(12.5))
                         .color(p.text_tertiary),
                 );
             }
@@ -1304,7 +1304,7 @@ fn render_spectrum_view(ui: &mut egui::Ui, state: &EditorState) {
 
     ui.add_space(8.0);
     let width = ui.available_width();
-    let height = 150.0;
+    let height = 175.0;
     let (rect, _resp) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let p = pal();
@@ -1344,7 +1344,7 @@ fn render_spectrum_view(ui: &mut egui::Ui, state: &EditorState) {
     ui.memory_mut(|m| m.data.insert_temp(silent_flag_id, silent));
 
     // ── Grid ─────────────────────────────────────────────────────────────
-    let label_font = theme::mono(9.0);
+    let label_font = theme::mono(10.0);
     for &freq in &[100.0f32, 1000.0, 10000.0] {
         if freq >= nyquist {
             continue;
@@ -1495,8 +1495,8 @@ fn render_spectrum_view(ui: &mut egui::Ui, state: &EditorState) {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     }
 
-    // ── Legend + neon edge ───────────────────────────────────────────────
-    paint::neon_edge(ui.painter(), rect);
+    // ── Legend + neon edge (raw ramp: the panel is dark in every theme) ──
+    paint::neon_edge_colored(ui.painter(), rect, p.grad_a, p.grad_c);
     let legend_y = rect.top() + 9.0;
     // Right-aligned text so the labels never clip against the panel edge.
     painter.text(
@@ -1506,15 +1506,15 @@ fn render_spectrum_view(ui: &mut egui::Ui, state: &EditorState) {
         label_font.clone(),
         theme::with_alpha(p.text_on_contrast, 0.55),
     );
-    painter.circle_filled(egui::pos2(rect.right() - 78.0, legend_y), 3.0, p.accent_tertiary);
+    painter.circle_filled(egui::pos2(rect.right() - 86.0, legend_y), 3.5, p.accent_tertiary);
     painter.text(
-        egui::pos2(rect.right() - 86.0, legend_y),
+        egui::pos2(rect.right() - 96.0, legend_y),
         egui::Align2::RIGHT_CENTER,
         "SPECTRUM",
         label_font.clone(),
         theme::with_alpha(p.text_on_contrast, 0.55),
     );
-    painter.circle_filled(egui::pos2(rect.right() - 152.0, legend_y), 3.0, p.grad_b);
+    painter.circle_filled(egui::pos2(rect.right() - 170.0, legend_y), 3.5, p.grad_b);
 
     // Frame
     painter.rect_stroke(
@@ -1538,7 +1538,7 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
     let peaks = [state.peak_l.load(Ordering::Relaxed), state.peak_r.load(Ordering::Relaxed)];
     let shown = [state.meter_db_l, state.meter_db_r];
 
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(210.0, 36.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(230.0, 40.0), egui::Sense::click());
     if resp.clicked() {
         state.clip_latched = false;
     }
@@ -1568,13 +1568,13 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
     let painter = ui.painter_at(rect);
     let db_x = |db: f32| -> f32 {
         let t = (db - METER_MIN_DB) / (METER_MAX_DB - METER_MIN_DB);
-        rect.left() + 22.0 + t.clamp(0.0, 1.0) * (rect.width() - 22.0 - 44.0)
+        rect.left() + 26.0 + t.clamp(0.0, 1.0) * (rect.width() - 26.0 - 52.0)
     };
 
     for i in 0..2 {
         let bar_db = if i == 0 { state.meter_db_l } else { state.meter_db_r };
-        let y = rect.top() + 5.0 + i as f32 * 13.0;
-        let h = 9.0f32;
+        let y = rect.top() + 6.0 + i as f32 * 14.0;
+        let h = 10.0f32;
         let track = Rect::from_min_max(
             Pos2::new(db_x(METER_MIN_DB), y),
             Pos2::new(db_x(METER_MAX_DB), y + h),
@@ -1606,7 +1606,7 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
             Pos2::new(rect.left() + 8.0, y + h * 0.5),
             egui::Align2::LEFT_CENTER,
             if i == 0 { "L" } else { "R" },
-            theme::mono_medium(9.5),
+            theme::mono_medium(10.5),
             p.text_secondary,
         );
         let db_text = if bar_db <= METER_MIN_DB + 0.5 {
@@ -1618,7 +1618,7 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
             Pos2::new(track.right() + 6.0, y + h * 0.5),
             egui::Align2::LEFT_CENTER,
             db_text,
-            theme::mono(9.5),
+            theme::mono(10.5),
             p.text_secondary,
         );
     }
@@ -1633,15 +1633,15 @@ fn meter_pair(ui: &mut egui::Ui, state: &mut EditorState) {
         Pos2::new(zero_x, rect.top() + 2.5),
         egui::Align2::CENTER_BOTTOM,
         "0",
-        theme::mono(8.5),
-        theme::with_alpha(p.text_primary, 0.35),
+        theme::mono(9.5),
+        theme::with_alpha(p.text_primary, 0.4),
     );
 
     // Latched clip bar across the top
     if state.clip_latched {
         let clip_rect = Rect::from_min_max(
-            Pos2::new(rect.left() + 22.0, rect.top() + 0.5),
-            Pos2::new(rect.right() - 44.0, rect.top() + 2.5),
+            Pos2::new(rect.left() + 26.0, rect.top() + 0.5),
+            Pos2::new(rect.right() - 52.0, rect.top() + 2.5),
         );
         painter.rect_filled(clip_rect, 1.0, p.error);
     }
@@ -1669,7 +1669,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
         // muted").
         let bypassed = state.params.global_bypass.value();
         let (bp_rect, bp_resp) =
-            ui.allocate_exact_size(Vec2::new(158.0, 28.0), egui::Sense::click());
+            ui.allocate_exact_size(Vec2::new(176.0, 32.0), egui::Sense::click());
         let bp_painter = ui.painter_at(bp_rect);
         bp_painter.rect_filled(
             bp_rect,
@@ -1699,7 +1699,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
             bp_rect.center(),
             egui::Align2::CENTER_CENTER,
             if bypassed { "GLOBAL BYPASS \u{00b7} ON" } else { "GLOBAL BYPASS \u{00b7} OFF" },
-            theme::mono_medium(11.0),
+            theme::mono_medium(12.5),
             if bypassed { p.warning } else { p.text_primary },
         );
         if bp_resp
@@ -1716,7 +1716,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
 
         // Master gain slider (same Aki slider as the param panel)
         ui.allocate_ui_with_layout(
-            Vec2::new(230.0, 28.0),
+            Vec2::new(260.0, 32.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 let gain_resp = widgets::float_slider(ui, setter, &state.params.gain.gain);
@@ -1737,7 +1737,7 @@ fn render_footer(ui: &mut egui::Ui, setter: &ParamSetter, state: &mut EditorStat
             // About ghost button
             let about_btn = ui.add(
                 egui::Button::new(
-                    RichText::new("About").font(theme::body(11.0)).color(p.text_secondary),
+                    RichText::new("About").font(theme::body(12.5)).color(p.text_secondary),
                 )
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::new(1.0, p.border)),

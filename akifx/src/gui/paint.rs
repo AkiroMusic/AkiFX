@@ -67,8 +67,9 @@ fn aurora_blob(
     painter.add(Shape::mesh(mesh));
 }
 
-/// Deterministic white-noise tile (each pixel white at 0–9/255 alpha ≈ the
-/// 3.5% global grain), generated once and cached on the editor state.
+/// Deterministic grain-noise tile (each pixel 0–9/255 alpha ≈ the 3.5%
+/// global grain), generated once and cached on the editor state. White grain
+/// on dark themes, black grain on light themes.
 fn noise_overlay(
     ctx: &egui::Context,
     painter: &Painter,
@@ -84,9 +85,13 @@ fn noise_overlay(
             state ^= state << 17;
             state
         };
+        let (r, g, b) = {
+            let c = theme::grain_color();
+            (c.r(), c.g(), c.b())
+        };
         let mut rgba = Vec::with_capacity(SIZE * SIZE * 4);
         for _ in 0..SIZE * SIZE {
-            rgba.extend_from_slice(&[255, 255, 255, (next() % 10) as u8]);
+            rgba.extend_from_slice(&[r, g, b, (next() % 10) as u8]);
         }
         let image = egui::ColorImage::from_rgba_unmultiplied([SIZE, SIZE], &rgba);
         let options = egui::TextureOptions {
@@ -128,12 +133,15 @@ pub fn glass_card(painter: &Painter, rect: Rect) -> Rect {
         .with_blur_width(14.0),
     ));
 
-    // Fill + border
+    // Fill + border. On light themes the liquid border (white 65%) is not
+    // visible against the cream base, so the shell line uses the pack border
+    // (the .double-bezel border token) instead.
+    let shell_stroke = if p.dark { p.liquid_border } else { p.border };
     painter.add(Shape::Rect(egui::epaint::RectShape::new(
         rect,
         CornerRadius::same(r),
         p.liquid_bg,
-        Stroke::new(1.0, p.liquid_border),
+        Stroke::new(1.0, shell_stroke),
         StrokeKind::Inside,
     )));
 
@@ -204,14 +212,20 @@ pub fn hairline(painter: &Painter, rect: Rect) {
 
 /// Neon edge (§6.2, static): a gradient band of ramp light along the top
 /// border of a card, fading to transparent at both ends. Cheap (one mesh) and
-/// motionless.
+/// motionless. On light themes the arc is darkened (§6.4.3).
 pub fn neon_edge(painter: &Painter, rect: Rect) {
     let p = theme::pal();
+    neon_edge_colored(painter, rect, theme::flow_color(p.grad_a), theme::flow_color(p.grad_c));
+}
+
+/// [`neon_edge`] with explicit colors — for surfaces whose own background
+/// does not follow the theme (e.g. the always-dark contrast panel).
+pub fn neon_edge_colored(painter: &Painter, rect: Rect, from: Color32, to: Color32) {
     let band = Rect::from_min_max(
         Pos2::new(rect.left() + 4.0, rect.top() + 0.5),
         Pos2::new(rect.right() - 4.0, rect.top() + 2.0),
     );
-    gradient_band(painter, band, p.grad_a, p.grad_c);
+    gradient_band(painter, band, from, to);
 }
 
 /// Shimmer edge (§6.1): a bright band of ramp light sweeping along the top
@@ -235,10 +249,15 @@ pub fn shimmer_edge(painter: &Painter, rect: Rect, t: f32) {
             continue;
         }
         let glow = (1.0 - d).powi(2);
-        let color = if seg_center < center {
-            theme::mix(p.grad_a, p.grad_c, glow)
+        let (ca, cc) = if theme::pal().dark {
+            (p.grad_a, p.grad_c)
         } else {
-            theme::mix(p.grad_c, p.grad_a, glow)
+            (theme::flow_color(p.grad_a), theme::flow_color(p.grad_c))
+        };
+        let color = if seg_center < center {
+            theme::mix(ca, cc, glow)
+        } else {
+            theme::mix(cc, ca, glow)
         };
         let alpha = 0.15 + 0.85 * glow;
         let seg = Rect::from_min_size(Pos2::new(x, y0), Vec2::new(seg_w + 0.5, 1.5));
