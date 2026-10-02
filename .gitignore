@@ -1,8 +1,8 @@
 # Rust build artifacts
 /target
 
-# Release artifacts (kept out of VCS; rebuild with cargo xtask bundle)
-/Releases
+# Release artifacts (kept out of VCS; rebuilt with cargo xtask bundle)
+/release
 
 # AI tool caches
 /.zcode
