@@ -139,10 +139,8 @@ impl ModuleChain {
     ///
     /// For series-cascaded modules, the total latency is the *sum* of
     /// individual latencies: each module's latency adds to the pipeline
-    /// delay. Currently only `PubertySimulator` introduces latency (2048),
-    /// so this equals 2048 when active and 0 when bypassed — same as the
-    /// old `max()` semantics in the single-latency case, but correct for
-    /// the general multi-latency future.
+    /// delay. The spectral modules each contribute fft (2048) + hop (512),
+    /// so this equals 2560 per powered spectral module and 0 when bypassed.
     pub fn latency_samples(&self) -> u64 {
         // Sum under the lock (no clone/allocation; the lock is uncontended
         // in practice and held for a handful of atomic loads).

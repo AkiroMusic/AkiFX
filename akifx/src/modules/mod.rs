@@ -153,7 +153,8 @@ pub trait AkiFxModule: Send + Sync {
     /// Drain any output MIDI events produced during the last `process_with_midi` call.
     ///
     /// Default implementation returns an empty vec. Modules that transform or generate
-    /// MIDI (e.g., [`MidiInverterModule`]) override this to return their output queue.
+    /// MIDI (e.g., the sine generator's voice manager) override this to return their
+    /// output queue.
     ///
     /// The plugin calls this after each process block to forward events to the host.
     /// Optional GUI spectrum view handle. Modules with a visualization

@@ -8,6 +8,8 @@ AkiFX unifies the core effects of two well-known open-source projects into a sin
 - **Platforms**: Windows (macOS/Linux buildable — the DSP is pure Rust)
 - **License**: GPLv3
 
+![AkiFX](Assets/screenshot.png)
+
 ---
 
 ## Highlights
@@ -16,14 +18,13 @@ AkiFX unifies the core effects of two well-known open-source projects into a sin
 - **Free module ordering** — drag-and-drop the processing chain in real time; reorderings persist with your project.
 - **Per-module power switches** — bypassed modules are skipped entirely (zero CPU) with a bit-identical passthrough guarantee; power states are saved with the session.
 - **Global bypass** — one host-automatable button turns the whole plugin into a straight wire.
-- **Live output metering** — stereo peak meters in the bottom strip, fed from the audio thread.
-- **Spectrum view** — the Spectral Compressor draws its live input spectrum with the threshold curve overlaid on a log-frequency axis; tune thresholds by eye.
+- **Factory presets** — ten recipes from Init to Full Suite in the title-bar preset bar; presets never touch master gain, the limiter or global bypass.
+- **Live output metering** — stereo peak meters (−60…+6 dBFS, 0 dB reference, clip latch) fed from the audio thread.
+- **Spectrum view** — the Spectral Compressor draws its live input spectrum with the threshold curve overlaid on a labeled log-frequency grid; tune thresholds by eye.
 - **Correct plug-in delay compensation** — algorithmic latency is reported dynamically and updates within the same processing block whenever it changes.
 - **Full MIDI support** — notes, CC, pitch bend, polyphonic pressure and per-note expression are broadcast to every enabled module.
 - **Real-time safe** — no heap allocations, no panics and no unbounded waits on the audio thread.
-- **Bilingual UI & docs** — English/Chinese interface with per-parameter tooltips; manuals in both languages.
-
-> **Upgrading from v0.2.x?** v0.3.0 streamlines the module set from 21 to 11 and is a breaking release: saved module states, ordering and parameters reset to defaults.
+- **Aurora Glass design language** — the Aki family look: aurora backdrop, glass cards, gradient-ramp controls, three-typeface system (Plus Jakarta Sans · Fraunces · IBM Plex Mono, all OFL).
 
 ---
 
@@ -72,8 +73,8 @@ cargo test -p akifx
 ### Quick Start
 
 1. Load **AkiFX** on a track. All modules start **bypassed** — the plugin is a straight wire.
-2. Click the **LEDs** on the rack to enable the modules you need (states persist with the project).
-3. Select a module to edit its **parameters** on the right; hover any control for a tooltip. Toggle-style parameters are single buttons; numeric parameters are sliders.
+2. Pick a **factory preset** from the title-bar preset bar, or click the rack **LEDs** to enable modules yourself (states persist with the project).
+3. Select a module to edit its **parameters** on the right; hover any control for a tooltip. Booleans are pill switches, enums are segmented selectors, numbers are gradient sliders.
 4. **Drag the handles** on the left of each row to reorder the chain in real time.
 5. Use **GLOBAL BYPASS** in the bottom strip to A/B the whole chain, and the **peak meters** to watch your output level.
 
@@ -95,10 +96,10 @@ Spectral modules carry algorithmic latency which is reported to the host and re-
 
 ## Documentation
 
-| Document | Languages |
+| Document | |
 |---|---|
-| [User Manual — all 11 modules: origin, principle, parameters, usage](docs/USER_MANUAL_en.md) | [中文版](docs/USER_MANUAL_zh.md) |
-| [Technical Overview — architecture, registry, STFT engine, DSP internals, real-time safety](docs/TECHNICAL_OVERVIEW_en.md) | [中文版](docs/TECHNICAL_OVERVIEW_zh.md) |
+| [User Manual — interface, all 11 modules, factory presets, troubleshooting](docs/MANUAL.md) | English + 中文 |
+| [Technical Overview — architecture, STFT engine, DSP internals, UI implementation, test inventory](docs/TECHNICAL.md) | English + 中文 |
 
 ---
 
@@ -116,7 +117,7 @@ Heartfelt thanks to both authors for releasing their work as free software.
 
 ## License
 
-AkiFX is licensed under the **[GNU GPLv3](LICENSE)** (required by the VST3 binding of nih-plug). See [LICENSE](LICENSE).
+AkiFX is licensed under the **[GNU GPLv3](LICENSE)** (required by the VST3 binding of nih-plug). See [LICENSE](LICENSE). The bundled fonts (Plus Jakarta Sans, Fraunces, IBM Plex Mono) are under the SIL OFL; their licenses ship in `akifx/assets/fonts/`.
 
 ---
 
@@ -132,6 +133,8 @@ AkiFX 将两个知名开源项目的核心效果整合到一条乐器级效果�
 - **平台**：Windows（macOS/Linux 可自行构建——DSP 为纯 Rust）
 - **许可证**：GPLv3
 
+![AkiFX](Assets/screenshot.png)
+
 ---
 
 ## 特性
@@ -140,14 +143,13 @@ AkiFX 将两个知名开源项目的核心效果整合到一条乐器级效果�
 - **模块顺序自由**——实时拖拽重排处理链，顺序随工程保存。
 - **逐模块电源开关**——旁路模块完全跳过（零 CPU），保证位一致直通；开关状态随工程持久化。
 - **全局旁路**——一个可在宿主中自动化的按钮，把整个插件变成直通线。
-- **实时输出表**——底部条内置立体声峰值表，数据来自音频线程。
-- **频谱视图**——Spectral Compressor 实时绘制输入频谱与门限曲线（对数频率轴），调门限所见即所得。
+- **工厂预设**——标题栏预设栏内置十个配方（Init 到 Full Suite）；预设绝不触碰主增益、限制器与全局旁路。
+- **实时输出表**——立体声峰值表（−60…+6 dBFS、0 dB 参考线、过载锁存），数据来自音频线程。
+- **频谱视图**——Spectral Compressor 在带标注的对数频率网格上实时绘制输入频谱与门限曲线，调门限所见即所得。
 - **正确的自动延迟补偿**——算法延迟动态上报宿主，变化时同一处理块内更新。
 - **完整 MIDI 支持**——音符、CC、弯音、复音压力、逐音符表达全部广播给已启用模块。
 - **实时安全**——音频线程无堆分配、无 panic、无无限等待。
-- **中英双语界面与文档**——全参数悬停提示；手册提供中英双语。
-
-> **从 v0.2.x 升级？** v0.3.0 将模块集从 21 个精简到 11 个，是破坏性版本：已保存的模块状态、顺序与参数会重置为默认。
+- **Aurora Glass 设计语言**——Aki 家族观感：极光幕布、玻璃卡片、坡道渐变控件、三字体系统（Plus Jakarta Sans · Fraunces · IBM Plex Mono，均为 OFL 许可）。
 
 ## 模块一览
 
@@ -165,7 +167,7 @@ AkiFX 将两个知名开源项目的核心效果整合到一条乐器级效果�
 | 10 | Gain | ±30 dB 纯净增益 |
 | 11 | Safety Limiter | 超阈值/NaN 播报 SOS 的保险丝 |
 
-每个模块的详细说明（由来、原理、参数、用法）见[用户手册](docs/USER_MANUAL_zh.md)。
+每个模块的详细说明（由来、原理、参数、用法）见[用户手册](docs/MANUAL.md)。
 
 ## 安装
 
@@ -194,8 +196,8 @@ cargo test -p akifx
 ### 快速上手
 
 1. 在音轨上加载 **AkiFX**。所有模块默认**旁路**——插件等价于直通线。
-2. 点击机架上的 **LED** 点亮需要的模块（状态随工程保存）。
-3. 选中模块后在右侧编辑**参数**：开关型参数是单个按钮，数值参数是滑条，悬停可看提示。
+2. 从标题栏预设栏选一个**工厂预设**，或自行点击机架 **LED** 点亮模块（状态随工程保存）。
+3. 选中模块后在右侧编辑**参数**：布尔是药丸开关，枚举是分段选择器，数值是渐变滑条，悬停可看提示。
 4. **拖拽**每行左侧的把手实时重排处理链。
 5. 底部条的 **GLOBAL BYPASS** 一键对比整条链，**峰值表**监视输出电平。
 
@@ -213,10 +215,10 @@ cargo test -p akifx
 
 ## 文档
 
-| 文档 | 语言 |
+| 文档 | |
 |---|---|
-| [用户手册 —— 11 个模块的由来/原理/参数/用法](docs/USER_MANUAL_zh.md) | [English](docs/USER_MANUAL_en.md) |
-| [技术文档 —— 架构、注册表、STFT 引擎、DSP 实现、实时安全](docs/TECHNICAL_OVERVIEW_zh.md) | [English](docs/TECHNICAL_OVERVIEW_en.md) |
+| [用户手册 —— 界面、11 个模块、工厂预设、故障排查](docs/MANUAL.md) | 中文 + English |
+| [技术文档 —— 架构、STFT 引擎、DSP 实现、UI 实现、测试清单](docs/TECHNICAL.md) | 中文 + English |
 
 ## 上游与致谢
 
@@ -232,4 +234,4 @@ AkiFX 对照上游仓库（SpectralSuite @ `5dfd294`、nih-plug @ `f36931f`）�
 
 ## 许可证
 
-AkiFX 以 **[GNU GPLv3](LICENSE)** 授权（nih-plug 的 VST3 绑定所要求），详见 [LICENSE](LICENSE)。
+AkiFX 以 **[GNU GPLv3](LICENSE)** 授权（nih-plug 的 VST3 绑定所要求），详见 [LICENSE](LICENSE)。内置字体（Plus Jakarta Sans、Fraunces、IBM Plex Mono）采用 SIL OFL 许可，许可文本随附于 `akifx/assets/fonts/`。

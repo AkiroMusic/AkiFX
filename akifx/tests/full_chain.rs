@@ -143,7 +143,7 @@ fn latency_sums_non_bypassed_modules() {
     let latency = chain.latency_samples();
     assert!(
         latency >= 2048,
-        "Expected chain latency >= 2048 (PubertySimulator), got {latency}"
+        "Expected chain latency >= 2048 (spectral modules), got {latency}"
     );
 }
 

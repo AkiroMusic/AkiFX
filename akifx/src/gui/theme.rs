@@ -628,7 +628,7 @@ mod tests {
         for name in ["OFL-PlusJakartaSans.txt", "OFL-Fraunces.txt", "OFL-IBMPlexMono.txt"] {
             assert!(dir.join(name).exists(), "{} missing", name);
         }
-        // The retired families must be gone
+        // The font set is exactly the Aki families
         assert!(!dir.join("Inter-Regular.ttf").exists());
         assert!(!dir.join("CormorantGaramond-SemiBold.ttf").exists());
     }
